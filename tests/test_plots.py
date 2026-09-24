@@ -69,6 +69,39 @@ def test_plot_roc_labels_and_title(predictions):
     assert [t.get_text() for t in ax.get_legend().get_texts()] == [f"m ({auroc:.3f})"]
 
 
+def test_plot_roc_line_kws(predictions):
+    _, ax = ru.plot_roc(predictions, "score", ls=":", lw=3, alpha=0.5, color="red")
+    roc_line, diag = ax.get_lines()
+    assert roc_line.get_linestyle() == ":"
+    assert roc_line.get_linewidth() == 3
+    assert roc_line.get_alpha() == 0.5
+    assert roc_line.get_color() == "red"
+    assert ax.get_legend() is None  # no label, no legend
+    assert (diag.get_linestyle(), diag.get_color()) == ("--", "gray")
+
+
+def test_plot_roc_diag_kws_override_defaults_partially(predictions):
+    _, ax = ru.plot_roc(predictions, "score", diag_kws={"color": "black", "lw": 0.5})
+    diag = ax.get_lines()[1]
+    assert (diag.get_linestyle(), diag.get_color(), diag.get_linewidth()) == ("--", "black", 0.5)
+
+
+def test_plot_roc_multiple_curves_share_legend(predictions):
+    _, ax = ru.plot_roc(predictions, "score", label="a", plot_1to1=False)
+    ru.plot_roc(predictions, "score", ax=ax, label="b", ls="--")
+    assert [t.get_text() for t in ax.get_legend().get_texts()] == ["a", "b"]
+
+
+def test_boxplot_and_roc_roc_kws(predictions):
+    _, (_, roc_ax) = ru.boxplot_and_roc(
+        predictions, "score", roc_kws={"label": "m", "lw": 4, "diag_kws": {"color": "black"}}
+    )
+    roc_line, diag = roc_ax.get_lines()
+    assert roc_line.get_linewidth() == 4
+    assert diag.get_color() == "black"
+    assert [t.get_text() for t in roc_ax.get_legend().get_texts()] == ["m"]
+
+
 def test_plot_roc_does_not_modify_input(predictions):
     before = predictions.copy()
     ru.plot_roc(predictions, "score")

@@ -95,7 +95,8 @@ def plot_roc(
     plot_1to1: bool = True,
     add_auc_to_label: bool = False,
     add_auc_to_title: bool = False,
-    color=None
+    diag_kws: Optional[dict] = None,
+    **line_kws,
 ) -> Tuple[plt.Figure, plt.Axes]:
     """Plot the ROC curve for a given measurand column in a Pandas DataFrame.
 
@@ -105,13 +106,17 @@ def plot_roc(
         pdf_predictions (pd.DataFrame): dataframe with the predictions and the labels
         measurand_col (str): column with the predictions
         ax (plt.Axes, optional): axes. Defaults to None.
-        label (str, optional): label for the line. Defaults to None.
-        label_col (str, optional): label column. Defaults to "label".
+        label (str, optional): legend text for the ROC line (not the class labels; see
+            label_col). If given, a legend is drawn. Defaults to None.
+        label_col (str, optional): column of true binary class labels. Defaults to "label".
         title (str, optional): title for the axes. Defaults to None.
         plot_1to1 (bool, optional): plot the 1:1 line, dashed and grey. Defaults to True.
         add_auc_to_label (bool, optional): append the AUROC to the line label. Defaults to False.
         add_auc_to_title (bool, optional): append the AUROC to the title. Defaults to False.
-        color (str, optional): color for the line. Defaults to None.
+        diag_kws (dict, optional): properties for the 1:1 line, overriding the default
+            dashed gray, e.g. {"color": "black", "lw": 0.5}. Defaults to None.
+        **line_kws: properties for the ROC line, passed to Axes.plot, e.g. color,
+            linestyle/ls, linewidth/lw, alpha, marker, zorder.
 
     Returns:
         Tuple[plt.Figure, plt.Axes]: figure and axes
@@ -134,10 +139,11 @@ def plot_roc(
         f = ax.get_figure()
     if add_auc_to_label:
         label = f"AUROC {auroc:.3f}" if label is None else f"{label} ({auroc:.3f})"
-    sns.lineplot(x=fprs, y=tprs, estimator=None, ax=ax, label=label,
-                 color=color)
+    ax.plot(fprs, tprs, label=label, **line_kws)
+    if label is not None:
+        ax.legend()
     if plot_1to1:
-        ax.plot([0, 1], [0, 1], linestyle="--", color="gray")
+        ax.plot([0, 1], [0, 1], **{"linestyle": "--", "color": "gray", **(diag_kws or {})})
     ax.set_ylabel("TPR")
     ax.set_xlabel("FPR")
     if title is not None:
@@ -158,13 +164,14 @@ def boxplot_and_roc(
     suptitle: Optional[str] = None,
     use_violins: bool = False,
     plot_roc_1to1: bool = True,
+    roc_kws: Optional[dict] = None,
 ) -> Tuple[plt.Figure, Tuple[plt.Axes, plt.Axes]]:
     """Plot a boxplot of the measurand and the ROC curve for a given measurand column in a Pandas DataFrame.
 
     Args:
         pdf_predictions (pd.DataFrame): dataframe with the predictions and the labels
         measurand_col (str): column with the predictions
-        label_col (str, optional): label column. Defaults to "label".
+        label_col (str, optional): column of true binary class labels. Defaults to "label".
         boxplot_ylabel (str, optional): y-axis label for the boxplot. Defaults to None.
         boxplot_xlabel (str, optional): x-axis label for the boxplot. Defaults to "Label".
         add_auroc_to_title (bool, optional): add AUROC to the ROC title. Defaults to True.
@@ -172,6 +179,9 @@ def boxplot_and_roc(
         suptitle (str, optional): title for the figure. Defaults to None.
         use_violins (bool, optional): use violins instead of boxplots. Defaults to False.
         plot_roc_1to1 (bool, optional): plot the 1:1 line on the ROC plot. Defaults to True.
+        roc_kws (dict, optional): extra keyword arguments for plot_roc, e.g. label, diag_kws,
+            or line properties like color and lw. Can't include ax, label_col or
+            plot_1to1. Defaults to None.
 
     Returns:
         Tuple[plt.Figure, Tuple[plt.Axes, plt.Axes]]: figure and axes
@@ -204,9 +214,9 @@ def boxplot_and_roc(
         pdf_predictions,
         measurand_col,
         ax=ax,
-        label=None,
         label_col=label_col,
         plot_1to1=plot_roc_1to1,
+        **(roc_kws or {}),
     )
     roc_title = "ROC"
     if add_auroc_to_title:
