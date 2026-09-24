@@ -1,0 +1,22 @@
+[project]
+name = "portmanteau"
+version = "0.1.0"
+requires-python = ">=3.10"
+license = "MIT"
+dependencies = ["pandas"]
+
+[project.optional-dependencies]
+download = ["pooch"]
+plots = ["matplotlib", "seaborn", "plotly", "scikit-learn"]
+sequence = ["networkx", "matplotlib", "seaborn"]
+notebook = ["ipython"]
+
+[dependency-groups]
+dev = ["pytest"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
