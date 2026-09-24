@@ -7,6 +7,7 @@ dependencies = ["pandas"]
 
 [project.optional-dependencies]
 download = ["pooch"]
+metrics = ["scikit-learn"]
 plots = ["matplotlib", "seaborn", "plotly", "scikit-learn"]
 sequence = ["networkx", "matplotlib", "seaborn"]
 notebook = ["ipython"]

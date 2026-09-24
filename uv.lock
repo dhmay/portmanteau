@@ -1691,6 +1691,10 @@ dependencies = [
 download = [
     { name = "pooch" },
 ]
+metrics = [
+    { name = "scikit-learn", version = "1.7.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "scikit-learn", version = "1.9.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+]
 notebook = [
     { name = "ipython", version = "8.39.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "ipython", version = "9.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
@@ -1726,11 +1730,12 @@ requires-dist = [
     { name = "pandas" },
     { name = "plotly", marker = "extra == 'plots'" },
     { name = "pooch", marker = "extra == 'download'" },
+    { name = "scikit-learn", marker = "extra == 'metrics'" },
     { name = "scikit-learn", marker = "extra == 'plots'" },
     { name = "seaborn", marker = "extra == 'plots'" },
     { name = "seaborn", marker = "extra == 'sequence'" },
 ]
-provides-extras = ["download", "plots", "sequence", "notebook"]
+provides-extras = ["download", "metrics", "plots", "sequence", "notebook"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest" }]
