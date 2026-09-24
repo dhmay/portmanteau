@@ -23,6 +23,10 @@ If you do that, to grab the latest:
 uv lock --upgrade-package portmanteau && uv sync
 ```
 
+## Dependencies
+
+The only required dependency is pandas. Importing individual modules incurs additional dependencies.
+
 | Extra      | Modules                                         | Adds                               |
 |------------|-------------------------------------------------|------------------------------------|
 | `download` | `portmanteau.data.download`                     | pooch                              |
@@ -31,7 +35,6 @@ uv lock --upgrade-package portmanteau && uv sync
 | `sequence` | `portmanteau.sequence.*`                        | networkx, matplotlib, seaborn      |
 | `notebook` | `plots.sankey.display_plotly_html`              | ipython                            |
 
-The only required dependency is pandas.
 
 ## Usage
 
