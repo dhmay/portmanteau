@@ -25,19 +25,20 @@ import pandas as pd
 DEFAULT_CHUNK_SIZE = 1_000_000
 
 
-def iter_hamming_pairs(
+def find_hamming_pairs(
     pdf: pd.DataFrame,
     seq_col: str,
     *,
     distance: int = 1,
     exact: bool = True,
     group_cols: Sequence[str] | None = None,
-    chunk_size: int = DEFAULT_CHUNK_SIZE,
-) -> Iterator[pd.DataFrame]:
-    """Yield pairs of rows whose sequences are within `distance`, in chunks.
+    annotation_columns: Sequence[str] | None = None,
+    max_pairs: int | None = None,
+) -> pd.DataFrame:
+    """Find all pairs of rows whose sequences are within `distance` of each other.
 
-    Use this instead of find_hamming_pairs when the full result may not fit in memory; see the
-    module docstring on how quickly pair counts grow.
+    Rows whose sequences differ in length are never paired. Rows with identical sequences are not
+    paired with each other, but each is paired with everything either of them is close to.
 
     Args:
         pdf: Input dataframe.
@@ -50,56 +51,8 @@ def iter_hamming_pairs(
             are the same, since identical sequences are never paired with each other.
         group_cols: Columns that must match for two rows to be paired. None compares every row
             against every other.
-        chunk_size: Approximate number of pairs per yielded frame.
-
-    Yields:
-        DataFrames with the columns described in find_hamming_pairs. At least one frame is always
-        yielded, so the schema is available even when there are no pairs.
-    """
-    if distance < 1:
-        raise ValueError(f"distance must be at least 1, got {distance}")
-
-    columns = _pair_columns(seq_col, exact=exact)
-    buffer: list[tuple] = []
-    yielded = False
-
-    groups: Iterable[pd.DataFrame]
-    if group_cols is None:
-        groups = [pdf]
-    else:
-        groups = (group for _, group in pdf.groupby(list(group_cols), observed=True, sort=False))
-
-    for group in groups:
-        for row in _group_pairs(group, seq_col, distance=distance, exact=exact):
-            buffer.append(row)
-            if len(buffer) >= chunk_size:
-                yield pd.DataFrame(buffer, columns=columns)
-                buffer, yielded = [], True
-    if buffer or not yielded:
-        yield pd.DataFrame(buffer, columns=columns)
-
-
-def find_hamming_pairs(
-    pdf: pd.DataFrame,
-    seq_col: str,
-    *,
-    distance: int = 1,
-    exact: bool = True,
-    group_cols: Sequence[str] | None = None,
-    max_pairs: int | None = None,
-) -> pd.DataFrame:
-    """Find all pairs of rows whose sequences are within `distance` of each other.
-
-    Rows whose sequences differ in length are never paired. Rows with identical sequences are not
-    paired with each other, but each is paired with everything either of them is close to.
-
-    Args:
-        pdf: Input dataframe.
-        seq_col: Column holding the sequences; see iter_hamming_pairs on why it is required.
-        distance: Hamming distance to look for.
-        exact: Only pairs at exactly `distance`, rather than at or below it. See
-            iter_hamming_pairs.
-        group_cols: Columns that must match for two rows to be paired.
+        annotation_columns: Columns of `pdf` to carry onto both sides of each pair, as by
+            annotate_pairs. None adds nothing.
         max_pairs: Raise rather than return more than this many pairs. A guard against the
             quadratic growth described in the module docstring; None means no limit.
 
@@ -111,6 +64,7 @@ def find_hamming_pairs(
         - ``seq_length``: the length the two sequences share
         - ``differing_positions``: tuple of the 0-based positions at which they differ
         - ``hamming_distance``: only when `exact` is False, where it varies
+        - ``{c}_i``, ``{c}_j`` for each column in `annotation_columns`
 
     Raises:
         ValueError: if `distance` is below 1, if `seq_col` is missing or has null values, or if
@@ -119,7 +73,12 @@ def find_hamming_pairs(
     chunks = []
     total = 0
     for chunk in iter_hamming_pairs(
-        pdf, seq_col, distance=distance, exact=exact, group_cols=group_cols
+        pdf,
+        seq_col,
+        distance=distance,
+        exact=exact,
+        group_cols=group_cols,
+        annotation_columns=annotation_columns,
     ):
         total += len(chunk)
         if max_pairs is not None and total > max_pairs:
@@ -137,6 +96,7 @@ def find_hamming1_pairs(
     seq_col: str,
     *,
     group_cols: Sequence[str] | None = None,
+    annotation_columns: Sequence[str] | None = None,
     max_pairs: int | None = None,
 ) -> pd.DataFrame:
     """Find pairs of rows whose sequences differ at exactly one position.
@@ -146,10 +106,16 @@ def find_hamming1_pairs(
     one-element ``differing_positions`` tuple.
     """
     pdf_pairs = find_hamming_pairs(
-        pdf, seq_col, distance=1, group_cols=group_cols, max_pairs=max_pairs
+        pdf,
+        seq_col,
+        distance=1,
+        group_cols=group_cols,
+        annotation_columns=annotation_columns,
+        max_pairs=max_pairs,
     )
-    positions = [positions[0] for positions in pdf_pairs.differing_positions]
-    return pdf_pairs.drop(columns="differing_positions").assign(differing_position=positions)
+    # replace in place rather than appending, so the column keeps its position in the frame
+    pdf_pairs["differing_positions"] = [positions[0] for positions in pdf_pairs.differing_positions]
+    return pdf_pairs.rename(columns={"differing_positions": "differing_position"})
 
 
 def annotate_pairs(
@@ -159,9 +125,8 @@ def annotate_pairs(
 ) -> pd.DataFrame:
     """Add columns from the source dataframe to each side of a pairs dataframe.
 
-    For each column ``c``, adds ``c_i`` and ``c_j`` (the values for the two rows of the pair) and
-    ``same_c`` (whether they are equal). Existing ``c_i``/``c_j`` columns, such as the sequence
-    columns, are replaced.
+    For each column ``c``, adds ``c_i`` and ``c_j``: the values for the two rows of the pair.
+    Existing ``c_i``/``c_j`` columns, such as the sequence columns, are replaced.
 
     Args:
         pdf_pairs: Pairs with ``row_i`` and ``row_j`` columns holding index labels of pdf_source,
@@ -186,9 +151,57 @@ def annotate_pairs(
         pdf_side = pdf_source.loc[pdf_annotated[f"row_{side}"], columns].reset_index(drop=True)
         pdf_side.columns = [f"{c}_{side}" for c in columns]
         pdf_annotated = pd.concat([pdf_annotated, pdf_side], axis=1)
-    for c in columns:
-        pdf_annotated[f"same_{c}"] = pdf_annotated[f"{c}_i"] == pdf_annotated[f"{c}_j"]
     return pdf_annotated
+
+
+def iter_hamming_pairs(
+    pdf: pd.DataFrame,
+    seq_col: str,
+    *,
+    distance: int = 1,
+    exact: bool = True,
+    group_cols: Sequence[str] | None = None,
+    annotation_columns: Sequence[str] | None = None,
+    chunk_size: int = DEFAULT_CHUNK_SIZE,
+) -> Iterator[pd.DataFrame]:
+    """Yield pairs of rows whose sequences are within `distance`, in chunks.
+
+    Use this instead of find_hamming_pairs when the full result may not fit in memory; see the
+    module docstring on how quickly pair counts grow. Arguments are as for find_hamming_pairs,
+    except that chunk_size sets the approximate number of pairs per yielded frame. Annotation is
+    applied per chunk, which costs the same in total as annotating once at the end.
+
+    Yields:
+        DataFrames with the columns described in find_hamming_pairs. At least one frame is always
+        yielded, so the schema is available even when there are no pairs.
+    """
+    if distance < 1:
+        raise ValueError(f"distance must be at least 1, got {distance}")
+
+    columns = _pair_columns(seq_col, exact=exact)
+    buffer: list[tuple] = []
+    yielded = False
+
+    def to_frame(rows: list[tuple]) -> pd.DataFrame:
+        pdf_chunk = pd.DataFrame(rows, columns=columns)
+        if annotation_columns:
+            pdf_chunk = annotate_pairs(pdf_chunk, pdf, annotation_columns)
+        return pdf_chunk
+
+    groups: Iterable[pd.DataFrame]
+    if group_cols is None:
+        groups = [pdf]
+    else:
+        groups = (group for _, group in pdf.groupby(list(group_cols), observed=True, sort=False))
+
+    for group in groups:
+        for row in _group_pairs(group, seq_col, distance=distance, exact=exact):
+            buffer.append(row)
+            if len(buffer) >= chunk_size:
+                yield to_frame(buffer)
+                buffer, yielded = [], True
+    if buffer or not yielded:
+        yield to_frame(buffer)
 
 
 def _pair_columns(seq_col: str, *, exact: bool) -> list[str]:

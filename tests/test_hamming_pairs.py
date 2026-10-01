@@ -144,13 +144,28 @@ def test_rejects_bad_input(cdr3s):
         find_hamming_pairs(cdr3s.assign(cdr3=[None] * 5), "cdr3")
 
 
-def test_annotate_pairs_adds_both_sides_and_equality(cdr3s):
+def test_annotate_pairs_adds_both_sides(cdr3s):
     annotated = annotate_pairs(find_hamming1_pairs(cdr3s, "cdr3"), cdr3s, ["cdr3", "hla"])
-    assert {"cdr3_i", "cdr3_j", "same_cdr3", "hla_i", "hla_j", "same_hla"} <= set(annotated.columns)
-    assert not annotated.same_cdr3.any()  # Hamming-1 pairs never share a sequence
-    assert annotated.same_hla.tolist() == [
-        hla_i == hla_j for hla_i, hla_j in zip(annotated.hla_i, annotated.hla_j)
-    ]
+    assert {"cdr3_i", "cdr3_j", "hla_i", "hla_j"} <= set(annotated.columns)
+    assert not any(c.startswith("same_") for c in annotated.columns)
+    for _, row in annotated.iterrows():
+        assert row.cdr3_i == cdr3s.loc[row.row_i, "cdr3"]
+        assert row.hla_j == cdr3s.loc[row.row_j, "hla"]
+
+
+def test_annotation_columns_matches_calling_annotate_pairs(cdr3s):
+    inline = find_hamming1_pairs(cdr3s, "cdr3", annotation_columns=["hla"])
+    after = annotate_pairs(find_hamming1_pairs(cdr3s, "cdr3"), cdr3s, ["hla"])
+    pd.testing.assert_frame_equal(inline, after)
+
+
+def test_annotation_columns_applies_per_chunk(cdr3s):
+    chunks = list(iter_hamming_pairs(cdr3s, "cdr3", annotation_columns=["hla"], chunk_size=1))
+    assert len(chunks) == 3 and all("hla_i" in chunk.columns for chunk in chunks)
+    combined = pd.concat(chunks, ignore_index=True)
+    assert set(zip(combined.row_i, combined.row_j)) == set(
+        zip(*[find_hamming1_pairs(cdr3s, "cdr3")[c] for c in ("row_i", "row_j")])
+    )
 
 
 def test_annotate_pairs_requires_a_unique_index(cdr3s):

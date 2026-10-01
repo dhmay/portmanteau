@@ -80,7 +80,9 @@ pairs = find_hamming_pairs(df, "cdr3", distance=2, group_cols=["vgene", "jgene"]
 # at most two positions, adding a hamming_distance column
 pairs = find_hamming_pairs(df, "cdr3", distance=2, exact=False)
 
-pairs = annotate_pairs(pairs, df, columns=["peptide", "subject"])   # adds _i, _j and same_ columns
+# carry other columns onto both sides, either afterwards or inline
+pairs = annotate_pairs(pairs, df, columns=["peptide", "subject"])          # adds _i and _j columns
+pairs = find_hamming1_pairs(df, "cdr3", annotation_columns=["peptide"])    # same, in one call
 ```
 
 Pair counts grow **quadratically**: ten times the sequences gives roughly a hundred times the
