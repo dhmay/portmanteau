@@ -6,20 +6,6 @@ matplotlib.use("Agg")
 pytest.importorskip("networkx")
 
 from portmanteau.sequence import hamming1_graph as hg  # noqa: E402
-from portmanteau.sequence.hamming1_pairs import (  # noqa: E402
-    find_cdr3_hamming1_pairs,
-    find_hamming1_pairs_same_vj,
-    populate_hamming1_pairs_othercols,
-)
-
-
-@pytest.fixture
-def cdr3s():
-    # non-default index, so index labels and positions differ
-    return pd.DataFrame(
-        {"cdr3": ["CASS", "CATS", "CATT", "CAXXX", "CASS"], "hla": ["A1", "A1", "A2", "A1", "A2"]},
-        index=[10, 20, 30, 40, 50],
-    )
 
 
 @pytest.fixture
@@ -32,41 +18,6 @@ def tcrs():
             "hla": ["A1", "A2", "A1", "A2"],
         }
     )
-
-
-def test_find_pairs(cdr3s):
-    pairs = find_cdr3_hamming1_pairs(cdr3s)
-    got = set(zip(pairs.row_i, pairs.row_j, pairs.differing_position))
-    assert got == {(10, 20, 2), (50, 20, 2), (20, 30, 3)}
-    assert (pairs.seq_length == 4).all()
-
-
-def test_empty_pairs_have_same_columns(cdr3s):
-    cols = list(find_cdr3_hamming1_pairs(cdr3s).columns)
-    assert list(find_cdr3_hamming1_pairs(cdr3s.iloc[[3]]).columns) == cols  # no pairs
-    assert list(find_cdr3_hamming1_pairs(cdr3s.iloc[:0]).columns) == cols  # no rows
-    alt = cdr3s.rename(columns={"cdr3": "junc"}).iloc[[3]]
-    assert list(find_cdr3_hamming1_pairs(alt, seq_col="junc").columns)[2:4] == ["junc_i", "junc_j"]
-
-
-def test_same_vj():
-    vj = pd.DataFrame({"tcr": ["CASS", "CATS", "CASS2"], "vgene": ["V1", "V1", "V2"], "jgene": ["J1"] * 3})
-    assert len(find_hamming1_pairs_same_vj(vj)) == 1
-    assert list(find_hamming1_pairs_same_vj(vj.iloc[[0]]).columns)[2:4] == ["tcr_i", "tcr_j"]
-
-
-def test_populate_othercols_uses_index_labels(cdr3s):
-    full = populate_hamming1_pairs_othercols(find_cdr3_hamming1_pairs(cdr3s), cdr3s, ["cdr3", "hla"])
-    for _, r in full.iterrows():
-        assert r.cdr3_i == cdr3s.loc[r.row_i, "cdr3"]
-        assert r.hla_j == cdr3s.loc[r.row_j, "hla"]
-        assert r.same_hla == (r.hla_i == r.hla_j)
-
-
-def test_populate_othercols_requires_unique_index(cdr3s):
-    pairs = find_cdr3_hamming1_pairs(cdr3s)
-    with pytest.raises(ValueError):
-        populate_hamming1_pairs_othercols(pairs, cdr3s.set_index(pd.Index([1, 1, 2, 3, 4])), ["hla"])
 
 
 def test_build_graph_with_attributes(tcrs):

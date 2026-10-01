@@ -9,7 +9,7 @@ from matplotlib import pyplot as plt
 from matplotlib.patches import Patch  # type: ignore
 from networkx.classes.graph import Graph as NxGraph
 
-from .hamming1_pairs import find_cdr3_hamming1_pairs, find_hamming1_pairs_same_vj
+from .hamming_pairs import find_hamming1_pairs
 
 
 def build_and_plot_seq_ham1_graph(
@@ -119,9 +119,9 @@ def build_seq_ham1_graph(
     seq_column_j = seq_column + "_j"
 
     if same_vj:
-        pdf_ham1pairs = find_hamming1_pairs_same_vj(pdf_tcrs, seq_col=seq_column)
+        pdf_ham1pairs = find_hamming1_pairs(pdf_tcrs, seq_column, group_cols=["vgene", "jgene"])
     else:
-        pdf_ham1pairs = find_cdr3_hamming1_pairs(pdf_tcrs, seq_col=seq_column)
+        pdf_ham1pairs = find_hamming1_pairs(pdf_tcrs, seq_column)
 
     all_seqs = set(pdf_tcrs[seq_column])
 

@@ -65,13 +65,35 @@ plot_roc(df, "score_b", ax=ax, label="B", ls="--", lw=2)  # extra kwargs style t
 fig, (box_ax, roc_ax) = boxplot_and_roc(df, "score")
 ```
 
+**Close sequence pairs.** `find_hamming_pairs` returns one row per pair of rows whose sequences
+are a given Hamming distance apart, with the differing positions:
+
+```python
+from portmanteau.sequence.hamming_pairs import find_hamming_pairs, find_hamming1_pairs, annotate_pairs
+
+# every pair of CDR3s differing at exactly one position
+pairs = find_hamming1_pairs(df, "cdr3")
+
+# two positions, and only between rows sharing a V and J gene
+pairs = find_hamming_pairs(df, "cdr3", distance=2, group_cols=["vgene", "jgene"])
+
+# at most two positions, adding a hamming_distance column
+pairs = find_hamming_pairs(df, "cdr3", distance=2, exact=False)
+
+pairs = annotate_pairs(pairs, df, columns=["peptide", "subject"])   # adds _i, _j and same_ columns
+```
+
+Pair counts grow **quadratically**: ten times the sequences gives roughly a hundred times the
+pairs. `group_cols` is the lever against that, since pairing within each of k groups costs
+`k * (n/k)^2` rather than `n^2`. Where the result is still too large to hold, `iter_hamming_pairs`
+yields it in chunks, and `find_hamming_pairs(..., max_pairs=...)` raises instead of exhausting
+memory.
+
 **Hamming-1 sequence graphs:**
 
 ```python
-from portmanteau.sequence.hamming1_pairs import find_cdr3_hamming1_pairs
 from portmanteau.sequence.hamming1_graph import build_seq_ham1_graph_and_extract_ccs
 
-pairs = find_cdr3_hamming1_pairs(df, seq_col="cdr3")
 df_with_ccs = build_seq_ham1_graph_and_extract_ccs(df, seq_column="cdr3", min_seqs=2)
 ```
 

@@ -1,7 +1,7 @@
 [project]
 name = "portmanteau"
-version = "0.1.0"
-description = "Portable Python utilities for data analysis: cached downloads, ROC metrics and plots, Hamming-1 sequence graphs"
+version = "0.2.0"
+description = "Portable Python utilities for data analysis: cached downloads, ROC metrics and plots, Hamming-distance sequence pairs and graphs"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
