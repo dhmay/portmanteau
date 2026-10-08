@@ -316,6 +316,23 @@ def _header(column) -> str:
     return " ".join(dict.fromkeys(parts))
 
 
+def _read_displayed_table(html: str):
+    """A frame holding exactly the strings the notebook displayed.
+
+    Two defaults have to be turned off, and both have put a wrong number on a slide:
+    `thousands` parses "1,110,640" back to an int, which then renders unseparated, and ordinary
+    type inference turns "0.6400" into 0.64, dropping the precision the cell chose to show. The
+    columns are read as text, so a slide shows the cell's own formatting rather than pandas'
+    opinion of it. Read twice because `converters` is keyed by column and the width is not known
+    until the first read; the strings are small.
+    """
+    import pandas as pd
+
+    first = pd.read_html(StringIO(html), thousands=None)[0]
+    return pd.read_html(StringIO(html), thousands=None,
+                        converters={index: str for index in range(first.shape[1])})[0]
+
+
 def _collect_outputs(blocks, figure_dir: Path, stem: str):
     """Pictures and frames from an `### images` section, in the order they were displayed."""
     import pandas as pd
@@ -331,10 +348,7 @@ def _collect_outputs(blocks, figure_dir: Path, stem: str):
                 path.write_bytes(base64.b64decode(data["image/png"]))
                 pictures.append(path)
             elif "text/html" in data:
-                # thousands=None: the notebook already formatted its numbers as strings, and the
-                # default would parse "1,110,640" back to an int and render it unseparated. The
-                # slide should show exactly what the cell showed.
-                frame = pd.read_html(StringIO(data["text/html"]), thousands=None)[0]
+                frame = _read_displayed_table(data["text/html"])
                 frame.columns = [_header(column) for column in frame.columns]
                 tables.append(frame.fillna(""))
     return pictures, tables

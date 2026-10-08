@@ -413,3 +413,24 @@ def test_missing_template_is_refused(tmp_path):
     nb = write(tmp_path, simple_notebook(images=None))
     with pytest.raises(DeckError, match="no such template"):
         build_deck(nb, out=tmp_path / "deck.pptx", template=tmp_path / "absent.potx")
+
+
+def test_table_keeps_the_notebooks_own_number_formatting(tmp_path):
+    """Trailing zeros and thousands separators are the cell's choice, not pandas' to undo."""
+    from pptx import Presentation
+
+    frame = pd.DataFrame({"auroc": ["0.6400"], "pairs": ["1,537"]}, index=["32 units"])
+    frame.index.name = "hidden layer"
+    nb = notebook([
+        nbformat.v4.new_markdown_cell("# Deck"),
+        nbformat.v4.new_markdown_cell("## Slide"),
+        nbformat.v4.new_markdown_cell("### text\n\n- bullet"),
+        nbformat.v4.new_markdown_cell("### images"),
+        code("table", [display(frame_html(frame))]),
+    ])
+    out = build_deck(write(tmp_path, nb), out=tmp_path / "deck.pptx")
+    table = next(shape for shape in Presentation(str(out)).slides[1].shapes
+                 if shape.has_table).table
+    values = [cell.text for cell in table.rows[1].cells]
+    assert "0.6400" in values     # not 0.64
+    assert "1,537" in values      # not 1537
