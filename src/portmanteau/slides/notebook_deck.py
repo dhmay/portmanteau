@@ -468,6 +468,66 @@ def _content_box(layout, style: DeckStyle) -> tuple[float, float, float, float]:
                     "set DeckStyle.body_idx to the body placeholder of your template")
 
 
+#: The main-part content types that distinguish a PowerPoint template from a presentation.
+TEMPLATE_CONTENT_TYPE = ("application/vnd.openxmlformats-officedocument"
+                         ".presentationml.template.main+xml")
+PRESENTATION_CONTENT_TYPE = ("application/vnd.openxmlformats-officedocument"
+                             ".presentationml.presentation.main+xml")
+
+
+def _is_template_package(path: Path) -> bool:
+    """Whether a package declares itself a template (.potx) rather than a presentation (.pptx).
+
+    Read from `[Content_Types].xml` rather than from the file extension, because the extension is
+    the part people get wrong - a .potx renamed .pptx is still a template inside, and python-pptx
+    refuses it either way.
+    """
+    import zipfile
+
+    try:
+        with zipfile.ZipFile(path) as package:
+            return TEMPLATE_CONTENT_TYPE.encode() in package.read("[Content_Types].xml")
+    except (zipfile.BadZipFile, KeyError):
+        return False
+
+
+def _as_presentation(source: Path, destination: Path) -> Path:
+    """Copy a .potx package, relabelling its main part as a presentation.
+
+    python-pptx refuses a template outright - "is not a PowerPoint file, content type is
+    ...template.main+xml" - though the layouts and theme inside are exactly what a deck needs. The
+    only difference that matters is the declared content type, so the package is rewritten rather
+    than converted.
+    """
+    import zipfile
+
+    with zipfile.ZipFile(source) as zin, \
+            zipfile.ZipFile(destination, "w", zipfile.ZIP_DEFLATED) as zout:
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+            if item.filename == "[Content_Types].xml":
+                data = data.replace(TEMPLATE_CONTENT_TYPE.encode(),
+                                    PRESENTATION_CONTENT_TYPE.encode())
+            zout.writestr(item, data)
+    return destination
+
+
+def _open_presentation(template):
+    """A `Presentation` on `template`, which may be a .pptx, a .potx, or None for the default."""
+    from pptx import Presentation
+
+    if template is None:
+        return Presentation()
+    path = Path(template)
+    if not path.exists():
+        raise DeckError(f"no such template: {path}")
+    if not _is_template_package(path):
+        return Presentation(str(path))
+    # Presentation() reads the whole package, so the rewritten copy need not outlive this call
+    with tempfile.TemporaryDirectory() as scratch:
+        return Presentation(str(_as_presentation(path, Path(scratch) / f"{path.stem}.pptx")))
+
+
 # --------------------------------------------------------------------------- building
 
 def _build_slide(prs, layouts, slide: Slide, figure_dir: Path, stem: str, source: str,
@@ -586,7 +646,8 @@ def build_deck(notebook, out, template=None, style: DeckStyle | None = None,
             combined deck from the notebooks, rather than merging the separate decks, means every
             guard runs over the result and there is no pptx surgery to go wrong.
         out: path to write the deck to.
-        template: a .pptx whose layouts and theme to use, or None for python-pptx's default.
+        template: a .pptx **or .potx** whose layouts and theme to use, or None for python-pptx's
+            default. A template is detected by its content type rather than its extension.
         style: layout knobs; see `DeckStyle`.
         figure_dir: where to put PNGs pulled out of the notebooks. A temporary directory by
             default, which is enough because python-pptx embeds a picture when it is added. Each
@@ -600,8 +661,6 @@ def build_deck(notebook, out, template=None, style: DeckStyle | None = None,
         DeckError: for anything that would otherwise produce a quietly wrong slide - see
             `read_notebook` and the layout rules in the module docstring.
     """
-    from pptx import Presentation
-
     if isinstance(notebook, (str, Path)):
         notebooks = [Path(notebook)]
     else:
@@ -612,7 +671,7 @@ def build_deck(notebook, out, template=None, style: DeckStyle | None = None,
     style = style or DeckStyle()
     parsed = [read_notebook(path) for path in notebooks]      # parse all before writing anything
 
-    prs = Presentation(str(template) if template else None)
+    prs = _open_presentation(template)
     layouts = {layout.name: layout for layout in prs.slide_layouts}
     for needed in (style.content_layout, style.section_layout):
         if needed not in layouts:

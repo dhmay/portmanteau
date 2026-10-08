@@ -145,6 +145,11 @@ build_deck(["part1.ipynb", "part2.ipynb"], out="talk.pptx")
 Building the combined deck from the notebooks, rather than merging the separate decks, means every
 guard runs over the result and there is no pptx surgery to go wrong.
 
+`template=` takes a **.potx as well as a .pptx**. python-pptx refuses a template outright, though
+its layouts and theme are exactly what a deck needs, so the package is relabelled on the way in -
+and the kind is read from the content type rather than the extension, since a .potx renamed .pptx
+is still a template inside.
+
 Stored outputs are used as they are; nothing is re-executed, so a build takes about a second. The
 cost is trusting the last kernel run, and the builder refuses a notebook that cannot have been run
 cleanly - any error output, any unexecuted cell, any `### images` cell that produced nothing.

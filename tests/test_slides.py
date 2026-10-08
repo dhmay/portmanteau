@@ -358,3 +358,58 @@ def test_combined_build_names_the_right_notebook_on_failure(tmp_path):
 def test_empty_notebook_list_is_refused(tmp_path):
     with pytest.raises(DeckError, match="no notebooks"):
         build_deck([], out=tmp_path / "combined.pptx")
+
+
+# --------------------------------------------------------------------------- templates
+
+def make_potx(tmp_path):
+    """A real .potx: a presentation package relabelled as a template, which is the only difference.
+
+    python-pptx cannot write one, so the fixture is built by rewriting the content type of a deck
+    it did write.
+    """
+    import zipfile
+
+    from pptx import Presentation
+    from portmanteau.slides.notebook_deck import PRESENTATION_CONTENT_TYPE, TEMPLATE_CONTENT_TYPE
+
+    source = tmp_path / "source.pptx"
+    Presentation().save(str(source))
+    potx = tmp_path / "house.potx"
+    with zipfile.ZipFile(source) as zin, zipfile.ZipFile(potx, "w") as zout:
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+            if item.filename == "[Content_Types].xml":
+                data = data.replace(PRESENTATION_CONTENT_TYPE.encode(),
+                                    TEMPLATE_CONTENT_TYPE.encode())
+            zout.writestr(item, data)
+    return potx
+
+
+def test_potx_template_is_accepted(tmp_path):
+    """python-pptx refuses a .potx outright; the builder rewrites it rather than failing."""
+    from pptx import Presentation
+
+    potx = make_potx(tmp_path)
+    with pytest.raises(ValueError, match="not a PowerPoint file"):
+        Presentation(str(potx))                       # the behaviour being worked around
+
+    nb = write(tmp_path, simple_notebook(images=None))
+    out = build_deck(nb, out=tmp_path / "deck.pptx", template=potx)
+    assert len(Presentation(str(out)).slides) == 2    # section slide plus the one
+
+
+def test_template_detected_by_content_type_not_extension(tmp_path):
+    """A .potx renamed .pptx is still a template inside, and must still work."""
+    from pptx import Presentation
+
+    misnamed = make_potx(tmp_path).rename(tmp_path / "misnamed.pptx")
+    nb = write(tmp_path, simple_notebook(images=None))
+    out = build_deck(nb, out=tmp_path / "deck.pptx", template=misnamed)
+    assert len(Presentation(str(out)).slides) == 2
+
+
+def test_missing_template_is_refused(tmp_path):
+    nb = write(tmp_path, simple_notebook(images=None))
+    with pytest.raises(DeckError, match="no such template"):
+        build_deck(nb, out=tmp_path / "deck.pptx", template=tmp_path / "absent.potx")
