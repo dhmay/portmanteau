@@ -251,3 +251,26 @@ def test_missing_layout_is_refused(tmp_path):
     style = DeckStyle(content_layout="No Such Layout")
     with pytest.raises(DeckError, match="no layout named"):
         build_deck(write(tmp_path, nb), out=tmp_path / "deck.pptx", style=style)
+
+
+# --------------------------------------------------------------------------- the shipped example
+
+def test_shipped_example_builds(tmp_path):
+    """`examples/minimal_deck.ipynb` must stay buildable, and stay executed in git.
+
+    It is the documentation for the notebook format, so it rots the moment a rule changes without
+    it. Building it here means a change that breaks it breaks the suite.
+    """
+    from pathlib import Path
+
+    example = Path(__file__).resolve().parents[1] / "examples" / "minimal_deck.ipynb"
+    if not example.exists():                       # a source checkout without the examples folder
+        pytest.skip("examples/minimal_deck.ipynb is not present")
+
+    out = build_deck(example, out=tmp_path / "example.pptx")
+    from pptx import Presentation
+    prs = Presentation(str(out))
+    assert len(prs.slides) == 5                    # section slide plus the four it documents
+    pictures = sum(1 for slide in prs.slides for shape in slide.shapes if shape.shape_type == 13)
+    tables = sum(1 for slide in prs.slides for shape in slide.shapes if shape.has_table)
+    assert (pictures, tables) == (3, 1)            # one figure, two stacked, one table

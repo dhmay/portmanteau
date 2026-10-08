@@ -131,6 +131,18 @@ table instead going full width beneath the bullets. Three figures, a table and a
 text that overflows its box, or a table running off the slide all raise `DeckError` naming the slide
 and section - a generated deck fails silently otherwise, and the errors say which cell to change.
 
+[`examples/minimal_deck.ipynb`](examples/minimal_deck.ipynb) is a four-slide notebook demonstrating
+every layout and markdown rule. It is committed executed, so it builds without being re-run:
+
+```bash
+uv run python -c "from portmanteau.slides.notebook_deck import build_deck; \
+    build_deck('examples/minimal_deck.ipynb', out='minimal_deck.pptx')"
+```
+
+One gotcha it documents: figures are picked up from a cell's *displayed output*, which under a
+Jupyter kernel is the inline backend's doing. Forcing a non-interactive backend such as Agg silences
+that, and the build then fails with "cell produced no output".
+
 ## Development
 
 ```bash
