@@ -544,11 +544,19 @@ def _add_section_slide(prs, layouts, title: str, style: DeckStyle) -> None:
     _suppress_bullet(frame.paragraphs[0])
 
 
-def _check_overflow(prs, source: str, titles: list[str], style: DeckStyle) -> None:
+def _check_overflow(prs, labels, style: DeckStyle) -> None:
+    """Fail the build when estimated text height exceeds its box, naming the slide.
+
+    `labels` runs parallel to `prs.slides`: (notebook, slide title) for a content slide and None
+    for a section slide, which carries a title at the layout's own size and is not checked. Walking
+    them together rather than indexing by position is what lets several notebooks share one
+    presentation - the slide numbers no longer line up with any one notebook's slide list.
+    """
     problems = []
-    for index, slide_obj in enumerate(prs.slides):
-        if slide_obj.slide_layout.name == style.section_layout:
-            continue                       # its text is a title at the layout's own size
+    for slide_obj, label in zip(prs.slides, labels):
+        if label is None:
+            continue
+        source, title = label
         for shape in slide_obj.shapes:
             if not (shape.is_placeholder and shape.placeholder_format.idx == style.body_idx):
                 continue
@@ -560,7 +568,6 @@ def _check_overflow(prs, source: str, titles: list[str], style: DeckStyle) -> No
                        for para in shape.text_frame.paragraphs]
             needed = estimate_height(bullets, width, style.body_pt)
             if needed > height:
-                title = titles[index - 1] if index else titles[0]
                 problems.append(f"  {source} / '{title}' / ### text: needs ~{needed:.2f}\" in a "
                                 f"{height:.2f}\" box (over by {needed - height:.2f}\") - shorten "
                                 "the bullets")
@@ -570,16 +577,21 @@ def _check_overflow(prs, source: str, titles: list[str], style: DeckStyle) -> No
 
 def build_deck(notebook, out, template=None, style: DeckStyle | None = None,
                figure_dir=None, section_slide: bool = True) -> Path:
-    """Render an executed notebook as a pptx deck.
+    """Render one executed notebook, or several, as a pptx deck.
 
     Args:
-        notebook: path to the executed notebook.
+        notebook: path to an executed notebook, or an iterable of them. **Several notebooks become
+            one deck**, in the order given, each opening with its own `# ` title as a section
+            slide - which is how a deck written in chunks is stitched together. Building the
+            combined deck from the notebooks, rather than merging the separate decks, means every
+            guard runs over the result and there is no pptx surgery to go wrong.
         out: path to write the deck to.
         template: a .pptx whose layouts and theme to use, or None for python-pptx's default.
         style: layout knobs; see `DeckStyle`.
-        figure_dir: where to put PNGs pulled out of the notebook. A temporary directory by default,
-            which is enough because python-pptx embeds a picture when it is added.
-        section_slide: whether to open the deck with a slide carrying the notebook's `# ` title.
+        figure_dir: where to put PNGs pulled out of the notebooks. A temporary directory by
+            default, which is enough because python-pptx embeds a picture when it is added. Each
+            notebook gets a subdirectory, so two notebooks cannot overwrite each other's figures.
+        section_slide: whether each notebook opens with a slide carrying its `# ` title.
 
     Returns:
         The path written.
@@ -590,8 +602,16 @@ def build_deck(notebook, out, template=None, style: DeckStyle | None = None,
     """
     from pptx import Presentation
 
+    if isinstance(notebook, (str, Path)):
+        notebooks = [Path(notebook)]
+    else:
+        notebooks = [Path(item) for item in notebook]
+    if not notebooks:
+        raise DeckError("no notebooks to build")
+
     style = style or DeckStyle()
-    deck_title, slides = read_notebook(notebook)
+    parsed = [read_notebook(path) for path in notebooks]      # parse all before writing anything
+
     prs = Presentation(str(template) if template else None)
     layouts = {layout.name: layout for layout in prs.slide_layouts}
     for needed in (style.content_layout, style.section_layout):
@@ -600,14 +620,18 @@ def build_deck(notebook, out, template=None, style: DeckStyle | None = None,
     _strip_sample_slides(prs)
 
     with tempfile.TemporaryDirectory() as scratch:
-        directory = Path(figure_dir) if figure_dir else Path(scratch)
-        directory.mkdir(parents=True, exist_ok=True)
-        if section_slide:
-            _add_section_slide(prs, layouts, deck_title, style)
-        for index, slide in enumerate(slides):
-            _build_slide(prs, layouts, slide, directory, f"slide{index:02d}",
-                         Path(notebook).name, style)
-        _check_overflow(prs, Path(notebook).name, [s.title for s in slides], style)
+        root = Path(figure_dir) if figure_dir else Path(scratch)
+        labels: list[tuple[str, str] | None] = []
+        for path, (deck_title, slides) in zip(notebooks, parsed):
+            directory = root / path.stem if len(notebooks) > 1 else root
+            directory.mkdir(parents=True, exist_ok=True)
+            if section_slide:
+                _add_section_slide(prs, layouts, deck_title, style)
+                labels.append(None)
+            for index, slide in enumerate(slides):
+                _build_slide(prs, layouts, slide, directory, f"slide{index:02d}", path.name, style)
+                labels.append((path.name, slide.title))
+        _check_overflow(prs, labels, style)
         out = Path(out)
         out.parent.mkdir(parents=True, exist_ok=True)
         prs.save(str(out))

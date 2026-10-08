@@ -315,3 +315,46 @@ def test_init_slide_nb_warns_about_a_non_displaying_backend():
         matplotlib.use(previous)
         for option in ("display.max_colwidth", "display.max_columns", "display.width"):
             pd.reset_option(option)
+
+
+# --------------------------------------------------------------------------- several notebooks
+
+def test_several_notebooks_become_one_deck(tmp_path):
+    """Chunked notebooks stitch into one deck, each opening with its own section slide."""
+    from pptx import Presentation
+
+    def chunk(title, slide_title):
+        return notebook([
+            nbformat.v4.new_markdown_cell(f"# {title}"),
+            nbformat.v4.new_markdown_cell(f"## {slide_title}"),
+            nbformat.v4.new_markdown_cell("### text\n\n- a bullet"),
+            nbformat.v4.new_markdown_cell("### images"),
+            code("fig", [display({"image/png": png_bytes()})]),
+        ])
+
+    first = write(tmp_path, chunk("Part one", "Opening"), "one.ipynb")
+    second = write(tmp_path, chunk("Part two", "Closing"), "two.ipynb")
+    out = build_deck([first, second], out=tmp_path / "combined.pptx")
+
+    prs = Presentation(str(out))
+    titles = [s.shapes.title.text if s.shapes.title is not None else None for s in prs.slides]
+    assert titles == ["Part one", "Opening", "Part two", "Closing"]
+    pictures = sum(1 for slide in prs.slides for shape in slide.shapes if shape.shape_type == 13)
+    assert pictures == 2          # each notebook's figure survives; neither overwrites the other
+
+
+def test_combined_build_names_the_right_notebook_on_failure(tmp_path):
+    """The overflow message has to name the notebook, not just a slide index into the deck."""
+    good = write(tmp_path, simple_notebook(images=None), "good.ipynb")
+    bad = simple_notebook(images=None)
+    bad.cells[3].source = "### text\n\n" + "\n".join(
+        f"- {'a long bullet that will not fit ' * 4} number {i}" for i in range(20))
+    bad_path = write(tmp_path, bad, "bad.ipynb")
+
+    with pytest.raises(DeckError, match="bad.ipynb"):
+        build_deck([good, bad_path], out=tmp_path / "combined.pptx")
+
+
+def test_empty_notebook_list_is_refused(tmp_path):
+    with pytest.raises(DeckError, match="no notebooks"):
+        build_deck([], out=tmp_path / "combined.pptx")

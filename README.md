@@ -135,6 +135,16 @@ build_deck("chapter1.ipynb", out="chapter1.pptx", template="house_style.pptx")
 a table cell past 50 characters by default, and the abbreviation then appears on the slide looking
 deliberate. It also warns if matplotlib is on a backend that will not display figures.
 
+**Several notebooks make one deck**, in the order given, each opening with its own `# ` title as a
+section slide - which is how a talk written in chunks is stitched together:
+
+```python
+build_deck(["part1.ipynb", "part2.ipynb"], out="talk.pptx")
+```
+
+Building the combined deck from the notebooks, rather than merging the separate decks, means every
+guard runs over the result and there is no pptx surgery to go wrong.
+
 Stored outputs are used as they are; nothing is re-executed, so a build takes about a second. The
 cost is trusting the last kernel run, and the builder refuses a notebook that cannot have been run
 cleanly - any error output, any unexecuted cell, any `### images` cell that produced nothing.

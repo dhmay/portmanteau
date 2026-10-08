@@ -1,6 +1,6 @@
 [project]
 name = "portmanteau"
-version = "0.5.0"
+version = "0.6.0"
 description = "Portable Python utilities for data analysis: cached downloads, ROC metrics and plots, Hamming-distance sequence pairs and graphs, notebook-sourced slide decks"
 readme = "README.md"
 requires-python = ">=3.10"
