@@ -116,11 +116,24 @@ slide is edited by editing a cell. The notebook's headings are the format:
 ### notes          markdown, which becomes the speaker notes
 ```
 
+In the notebook's first code cell:
+
+```python
+from portmanteau.slides.notebook_deck import init_slide_nb
+init_slide_nb()
+```
+
+and then, from a script:
+
 ```python
 from portmanteau.slides.notebook_deck import build_deck
 
 build_deck("chapter1.ipynb", out="chapter1.pptx", template="house_style.pptx")
 ```
+
+`init_slide_nb` exists because a deck is built from what the notebook *displayed*: pandas truncates
+a table cell past 50 characters by default, and the abbreviation then appears on the slide looking
+deliberate. It also warns if matplotlib is on a backend that will not display figures.
 
 Stored outputs are used as they are; nothing is re-executed, so a build takes about a second. The
 cost is trusting the last kernel run, and the builder refuses a notebook that cannot have been run

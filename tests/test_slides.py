@@ -274,3 +274,44 @@ def test_shipped_example_builds(tmp_path):
     pictures = sum(1 for slide in prs.slides for shape in slide.shapes if shape.shape_type == 13)
     tables = sum(1 for slide in prs.slides for shape in slide.shapes if shape.has_table)
     assert (pictures, tables) == (3, 1)            # one figure, two stacked, one table
+
+
+# --------------------------------------------------------------------------- notebook set-up
+
+def test_init_slide_nb_stops_pandas_truncating_cells():
+    """The default max_colwidth of 50 truncates through `_repr_html_`, which is what a deck reads.
+
+    Worth testing against `_repr_html_` specifically: `to_html` ignores the option, so a frame that
+    looks fine when you call `to_html` yourself can still reach the slide abbreviated.
+    """
+    from portmanteau.slides.notebook_deck import init_slide_nb
+
+    long = "pairs share TCRs; splitting pairs leaks a group across the split"
+    frame = pd.DataFrame({"why": [long]}, index=["split by peptide"])
+
+    pd.set_option("display.max_colwidth", 50)
+    assert "..." in frame._repr_html_()
+
+    try:
+        init_slide_nb()
+        assert "..." not in frame._repr_html_()
+        assert long in frame._repr_html_()
+    finally:
+        pd.reset_option("display.max_colwidth")
+        pd.reset_option("display.max_columns")
+        pd.reset_option("display.width")
+
+
+def test_init_slide_nb_warns_about_a_non_displaying_backend():
+    matplotlib = pytest.importorskip("matplotlib")
+    from portmanteau.slides.notebook_deck import init_slide_nb
+
+    previous = matplotlib.get_backend()
+    matplotlib.use("Agg")
+    try:
+        with pytest.warns(UserWarning, match="does not display figures"):
+            init_slide_nb()
+    finally:
+        matplotlib.use(previous)
+        for option in ("display.max_colwidth", "display.max_columns", "display.width"):
+            pd.reset_option(option)

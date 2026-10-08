@@ -37,10 +37,12 @@ the stored state says 100% and text renders full size over whatever is beneath i
 estimates the rendered height and raises, naming the slide and section, so the error says which cell
 to shorten. Tables are checked against the bottom of the slide for the same reason.
 
-Typical use::
+Typical use - `init_slide_nb` in the notebook's first code cell, `build_deck` from a script::
+
+    from portmanteau.slides.notebook_deck import init_slide_nb
+    init_slide_nb()
 
     from portmanteau.slides.notebook_deck import build_deck
-
     build_deck("chunk1.ipynb", out="chunk1.pptx", template="house_style.pptx")
 
 Needs the ``slides`` extra: ``pip install portmanteau[slides]``.
@@ -51,14 +53,15 @@ from __future__ import annotations
 import base64
 import math
 import re
+import sys
 import tempfile
 from dataclasses import dataclass, field
 from io import StringIO
 from pathlib import Path
 from typing import Iterable
 
-__all__ = ["DeckError", "DeckStyle", "Slide", "build_deck", "read_notebook", "inline_runs",
-           "parse_bullets"]
+__all__ = ["DeckError", "DeckStyle", "Slide", "build_deck", "init_slide_nb", "read_notebook",
+           "inline_runs", "parse_bullets"]
 
 SECTIONS = ("prep", "text", "images", "notes")
 EMU_PER_INCH = 914400
@@ -104,6 +107,47 @@ class Slide:
 
     title: str
     cells: dict = field(default_factory=lambda: {name: [] for name in SECTIONS})
+
+
+def init_slide_nb(max_columns: int | None = None, width: int = 220) -> None:
+    """Set up a notebook whose outputs will become slides. Call it in the first code cell.
+
+    A deck is built from what the notebook *displayed*, so anything the notebook abbreviates for
+    its own readability is abbreviated on the slide too - and a truncated table looks deliberate
+    once it is in PowerPoint. The settings that matter:
+
+    - **`display.max_colwidth = None`.** The default is 50 characters, and a longer cell renders as
+      "pairs share TCRs; splitting pairs leaks a grou..." - in the notebook, and then on the slide.
+      Note this bites through `_repr_html_`, which is what a notebook stores, and *not* through
+      `to_html`, so it will not show up if you test a frame by calling `to_html` yourself.
+    - **`display.max_columns` and `display.width`**, so a wide frame is not elided mid-table.
+
+    It also warns if matplotlib is already using a non-interactive backend, because figures are
+    picked up from a cell's *displayed* output: under Agg nothing is displayed, and the build fails
+    later with "cell produced no output" for a notebook that looks fine when you open it.
+
+    Args:
+        max_columns: `display.max_columns`; None means no limit.
+        width: `display.width`, the character width pandas lays a frame out in.
+    """
+    import warnings
+
+    import pandas as pd
+
+    pd.set_option("display.max_colwidth", None)
+    pd.set_option("display.max_columns", max_columns)
+    pd.set_option("display.width", width)
+
+    backend = sys.modules.get("matplotlib")
+    if backend is not None:
+        name = backend.get_backend().lower()
+        if "inline" not in name and "nbagg" not in name and "widget" not in name:
+            warnings.warn(
+                f"matplotlib is using the {backend.get_backend()!r} backend, which does not "
+                "display figures. Figures become slides only if a cell displays them, so the "
+                "build will fail with 'cell produced no output'. Let the Jupyter kernel pick its "
+                "inline backend rather than calling matplotlib.use().",
+                stacklevel=2)
 
 
 # --------------------------------------------------------------------------- reading
