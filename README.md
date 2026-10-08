@@ -1,7 +1,7 @@
 # portmanteau
 
 Small, portable Python utilities for data analysis: cached downloads, ROC metrics and
-plots, Hamming-1 sequence graphs, and styling for plots.
+plots, Hamming-1 sequence graphs, styling for plots, and slide decks built from notebooks.
 
 ## Install
 
@@ -34,6 +34,7 @@ The only required dependency is pandas. Importing individual modules incurs addi
 | `plots`    | `portmanteau.plots.*`                           | matplotlib, seaborn, plotly, scikit-learn |
 | `sequence` | `portmanteau.sequence.*`                        | networkx, matplotlib, seaborn      |
 | `notebook` | `plots.sankey.display_plotly_html`              | ipython                            |
+| `slides`   | `portmanteau.slides.notebook_deck`              | python-pptx, pillow, lxml, nbformat |
 
 
 ## Usage
@@ -101,6 +102,34 @@ df_with_ccs = build_seq_ham1_graph_and_extract_ccs(df, seq_column="cdr3", min_se
 
 **Plot style:** `portmanteau.plots.style.set_style()` makes the colorblind-safe palette the
 default for matplotlib, seaborn and plotly.
+
+**Decks from notebooks.** `portmanteau.slides.notebook_deck` renders an executed notebook as a
+pptx, so every number on a slide is produced by code sitting beside the prose describing it, and a
+slide is edited by editing a cell. The notebook's headings are the format:
+
+```
+# Deck title       the opening section slide (that line only)
+## Slide title     one slide
+### prep           code whose output is never rendered
+### text           markdown, which becomes the bullets
+### images         code whose outputs become pictures and tables
+### notes          markdown, which becomes the speaker notes
+```
+
+```python
+from portmanteau.slides.notebook_deck import build_deck
+
+build_deck("chapter1.ipynb", out="chapter1.pptx", template="house_style.pptx")
+```
+
+Stored outputs are used as they are; nothing is re-executed, so a build takes about a second. The
+cost is trusting the last kernel run, and the builder refuses a notebook that cannot have been run
+cleanly - any error output, any unexecuted cell, any `### images` cell that produced nothing.
+
+Layout is fixed rather than configurable: bullets left, figures right (one centred, two stacked), a
+table instead going full width beneath the bullets. Three figures, a table and a figure together,
+text that overflows its box, or a table running off the slide all raise `DeckError` naming the slide
+and section - a generated deck fails silently otherwise, and the errors say which cell to change.
 
 ## Development
 
