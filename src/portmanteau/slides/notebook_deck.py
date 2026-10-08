@@ -87,6 +87,10 @@ class DeckStyle:
     #: fraction of the content width given to bullets when figures sit beside them
     text_fraction: float = 0.46
     column_gap: float = 0.3
+    #: how close to the bottom of the slide a figure or table may come. The layout's body
+    #: placeholder is the box for *text*; a table sits below it and may legitimately run further,
+    #: so the limit for figures and tables is the slide itself less this margin.
+    bottom_margin: float = 0.45
     table_row_height: float = 0.32
     table_pt: int = 13
     table_gap: float = 0.3
@@ -442,16 +446,16 @@ def _build_slide(prs, layouts, slide: Slide, figure_dir: Path, stem: str, source
     bullets = parse_bullets(slide.cells["text"])
 
     left, top, width, height = _content_box(layout, style)
-    slide_height = prs.slide_height / EMU_PER_INCH
-    bottom = min(top + height, slide_height - 0.3)
+    text_bottom = top + height
+    media_bottom = prs.slide_height / EMU_PER_INCH - style.bottom_margin
 
     if pictures:
         text_width = width * style.text_fraction
         body.left, body.top = Inches(left), Inches(top)
-        body.width, body.height = Inches(text_width), Inches(bottom - top)
+        body.width, body.height = Inches(text_width), Inches(text_bottom - top)
         column_left = left + text_width + style.column_gap
         column_width = width - text_width - style.column_gap
-        column_height = bottom - top
+        column_height = media_bottom - top
         if len(pictures) == 1:
             _place_picture(slide_obj, pictures[0], column_left, top, column_width, column_height)
         else:
@@ -466,7 +470,7 @@ def _build_slide(prs, layouts, slide: Slide, figure_dir: Path, stem: str, source
         table_top = top + needed + style.table_gap
         for frame in tables:
             table_top = _place_table(slide_obj, frame, left, table_top, width, style) + 0.25
-        overhang = (table_top - 0.25) - bottom
+        overhang = (table_top - 0.25) - media_bottom
         if overhang > 0:
             raise DeckError(
                 f"{where}: the table runs {overhang:.2f}\" off the bottom of the slide "
@@ -474,7 +478,7 @@ def _build_slide(prs, layouts, slide: Slide, figure_dir: Path, stem: str, source
                 "'### images' or the bullets above it, or split the slide.")
     else:
         body.left, body.top = Inches(left), Inches(top)
-        body.width, body.height = Inches(width), Inches(bottom - top)
+        body.width, body.height = Inches(width), Inches(text_bottom - top)
 
     _write_bullets(body, bullets, style.body_pt)
     if style.slide_numbers:
