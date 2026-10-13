@@ -85,6 +85,7 @@ class DeckStyle:
 
     content_layout: str = "Title and Content"
     section_layout: str = "Section Header"
+    title_layout: str = "Title Slide"
     body_idx: int = 1
     body_pt: int = 17
     #: fraction of the content width given to bullets when figures sit beside them
@@ -606,6 +607,33 @@ def _build_slide(prs, layouts, slide: Slide, figure_dir: Path, stem: str, source
         slide_obj.notes_slide.notes_text_frame.text = notes
 
 
+def _add_title_slide(prs, layouts, title: str | None, author: str | None,
+                     style: DeckStyle) -> None:
+    """The deck's opening slide. Empty unless a title or an author is given.
+
+    Placeholders left unfilled are removed rather than left in place: an empty one is invisible
+    in a slideshow but shows its "Click to add title" prompt while editing, which makes a
+    deliberately blank opener look unfinished.
+    """
+    slide_obj = prs.slides.add_slide(layouts[style.title_layout])
+    heading = slide_obj.shapes.title
+    if heading is not None and title:
+        heading.text_frame.paragraphs[0].add_run().text = title
+
+    # compared by index, not identity: python-pptx hands out a fresh wrapper object on every
+    # access, so `shape is not heading` is true even for the placeholder that *is* the heading
+    heading_idx = heading.placeholder_format.idx if heading is not None else None
+    subtitle = next((shape for shape in slide_obj.placeholders
+                     if shape.placeholder_format.idx != heading_idx and shape.has_text_frame),
+                    None)
+    if subtitle is not None and author:
+        subtitle.text_frame.paragraphs[0].add_run().text = author
+
+    for shape in list(slide_obj.placeholders):
+        if shape.has_text_frame and not shape.text_frame.text:
+            shape._element.getparent().remove(shape._element)
+
+
 def _add_section_slide(prs, layouts, title: str, style: DeckStyle) -> None:
     slide_obj = prs.slides.add_slide(layouts[style.section_layout])
     if slide_obj.shapes.title is not None:
@@ -650,7 +678,8 @@ def _check_overflow(prs, labels, style: DeckStyle) -> None:
 
 
 def build_deck(notebook, out, template=None, style: DeckStyle | None = None,
-               figure_dir=None, section_slide: bool = True) -> Path:
+               figure_dir=None, section_slide: bool = True, title_slide: bool = True,
+               title: str | None = None, author: str | None = None) -> Path:
     """Render one executed notebook, or several, as a pptx deck.
 
     Args:
@@ -667,6 +696,11 @@ def build_deck(notebook, out, template=None, style: DeckStyle | None = None,
             default, which is enough because python-pptx embeds a picture when it is added. Each
             notebook gets a subdirectory, so two notebooks cannot overwrite each other's figures.
         section_slide: whether each notebook opens with a slide carrying its `# ` title.
+        title_slide: whether the deck opens with a title slide. On by default, and **empty
+            unless `title` or `author` is given** - a blank opener is a slide to write on, and
+            a deck that never wanted one passes False.
+        title: the deck's title, for the title slide.
+        author: the deck's author, for the title slide's subtitle.
 
     Returns:
         The path written.
@@ -687,7 +721,10 @@ def build_deck(notebook, out, template=None, style: DeckStyle | None = None,
 
     prs = _open_presentation(template)
     layouts = {layout.name: layout for layout in prs.slide_layouts}
-    for needed in (style.content_layout, style.section_layout):
+    needed_layouts = [style.content_layout, style.section_layout]
+    if title_slide:
+        needed_layouts.append(style.title_layout)
+    for needed in needed_layouts:
         if needed not in layouts:
             raise DeckError(f"template has no layout named '{needed}'; it has {sorted(layouts)}")
     _strip_sample_slides(prs)
@@ -695,6 +732,9 @@ def build_deck(notebook, out, template=None, style: DeckStyle | None = None,
     with tempfile.TemporaryDirectory() as scratch:
         root = Path(figure_dir) if figure_dir else Path(scratch)
         labels: list[tuple[str, str] | None] = []
+        if title_slide:
+            _add_title_slide(prs, layouts, title, author, style)
+            labels.append(None)
         for path, (deck_title, slides) in zip(notebooks, parsed):
             directory = root / path.stem if len(notebooks) > 1 else root
             directory.mkdir(parents=True, exist_ok=True)

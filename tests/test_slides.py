@@ -180,11 +180,11 @@ def test_builds_a_deck_with_figure_table_and_notes(tmp_path):
 
     from pptx import Presentation
     prs = Presentation(str(out))
-    assert len(prs.slides) == 3                                   # section slide plus two
-    assert prs.slides[1].shapes.title.text == "Figure slide"
-    assert any(shape.shape_type == 13 for shape in prs.slides[1].shapes)       # a picture
-    assert prs.slides[1].notes_slide.notes_text_frame.text == "some notes"
-    tables = [shape for shape in prs.slides[2].shapes if shape.has_table]
+    assert len(prs.slides) == 4                      # title slide, section slide, plus two
+    assert prs.slides[2].shapes.title.text == "Figure slide"
+    assert any(shape.shape_type == 13 for shape in prs.slides[2].shapes)       # a picture
+    assert prs.slides[2].notes_slide.notes_text_frame.text == "some notes"
+    tables = [shape for shape in prs.slides[3].shapes if shape.has_table]
     assert len(tables) == 1
     cells = [cell.text for cell in tables[0].table.rows[1].cells]
     assert "1,110,640" in cells          # the notebook's own formatting survives read_html
@@ -202,7 +202,7 @@ def test_multiindex_headers_are_flattened(tmp_path):
     ])
     out = build_deck(write(tmp_path, nb), out=tmp_path / "deck.pptx")
     from pptx import Presentation
-    table = next(shape for shape in Presentation(str(out)).slides[1].shapes
+    table = next(shape for shape in Presentation(str(out)).slides[2].shapes
                  if shape.has_table).table
     headers = [cell.text for cell in table.rows[0].cells]
     assert headers == ["stage", "A", "B"]
@@ -213,7 +213,7 @@ def test_section_slide_can_be_omitted(tmp_path):
     nb = simple_notebook(images=None)
     out = build_deck(write(tmp_path, nb), out=tmp_path / "deck.pptx", section_slide=False)
     from pptx import Presentation
-    assert len(Presentation(str(out)).slides) == 1
+    assert len(Presentation(str(out)).slides) == 2       # the title slide still opens it
 
 
 def test_too_many_figures_is_refused(tmp_path):
@@ -270,7 +270,7 @@ def test_shipped_example_builds(tmp_path):
     out = build_deck(example, out=tmp_path / "example.pptx")
     from pptx import Presentation
     prs = Presentation(str(out))
-    assert len(prs.slides) == 5                    # section slide plus the four it documents
+    assert len(prs.slides) == 6          # title slide, section slide, plus the four it documents
     pictures = sum(1 for slide in prs.slides for shape in slide.shapes if shape.shape_type == 13)
     tables = sum(1 for slide in prs.slides for shape in slide.shapes if shape.has_table)
     assert (pictures, tables) == (3, 1)            # one figure, two stacked, one table
@@ -338,7 +338,7 @@ def test_several_notebooks_become_one_deck(tmp_path):
 
     prs = Presentation(str(out))
     titles = [s.shapes.title.text if s.shapes.title is not None else None for s in prs.slides]
-    assert titles == ["Part one", "Opening", "Part two", "Closing"]
+    assert titles == [None, "Part one", "Opening", "Part two", "Closing"]
     pictures = sum(1 for slide in prs.slides for shape in slide.shapes if shape.shape_type == 13)
     assert pictures == 2          # each notebook's figure survives; neither overwrites the other
 
@@ -396,7 +396,7 @@ def test_potx_template_is_accepted(tmp_path):
 
     nb = write(tmp_path, simple_notebook(images=None))
     out = build_deck(nb, out=tmp_path / "deck.pptx", template=potx)
-    assert len(Presentation(str(out)).slides) == 2    # section slide plus the one
+    assert len(Presentation(str(out)).slides) == 3    # title and section slides plus the one
 
 
 def test_template_detected_by_content_type_not_extension(tmp_path):
@@ -406,7 +406,7 @@ def test_template_detected_by_content_type_not_extension(tmp_path):
     misnamed = make_potx(tmp_path).rename(tmp_path / "misnamed.pptx")
     nb = write(tmp_path, simple_notebook(images=None))
     out = build_deck(nb, out=tmp_path / "deck.pptx", template=misnamed)
-    assert len(Presentation(str(out)).slides) == 2
+    assert len(Presentation(str(out)).slides) == 3
 
 
 def test_missing_template_is_refused(tmp_path):
@@ -429,8 +429,45 @@ def test_table_keeps_the_notebooks_own_number_formatting(tmp_path):
         code("table", [display(frame_html(frame))]),
     ])
     out = build_deck(write(tmp_path, nb), out=tmp_path / "deck.pptx")
-    table = next(shape for shape in Presentation(str(out)).slides[1].shapes
+    table = next(shape for shape in Presentation(str(out)).slides[2].shapes
                  if shape.has_table).table
     values = [cell.text for cell in table.rows[1].cells]
     assert "0.6400" in values     # not 0.64
     assert "1,537" in values      # not 1537
+
+
+def test_the_deck_opens_with_an_empty_title_slide(tmp_path):
+    """Empty by default: a slide to write on, with no leftover placeholder prompts."""
+    from pptx import Presentation
+    out = build_deck(write(tmp_path, simple_notebook(images=None)), tmp_path / "deck.pptx")
+    opener = Presentation(str(out)).slides[0]
+    assert opener.shapes.title is None, "an unfilled title placeholder is removed, not left blank"
+    assert not [shape for shape in opener.shapes if shape.has_text_frame
+                and shape.text_frame.text]
+
+
+def test_title_and_author_go_on_the_title_slide(tmp_path):
+    from pptx import Presentation
+    out = build_deck(write(tmp_path, simple_notebook(images=None)), tmp_path / "deck.pptx",
+                     title="A Title", author="An Author")
+    opener = Presentation(str(out)).slides[0]
+    assert opener.shapes.title.text == "A Title"
+    text = [shape.text_frame.text for shape in opener.shapes if shape.has_text_frame]
+    assert "An Author" in text
+
+
+def test_author_without_a_title_leaves_no_empty_heading(tmp_path):
+    from pptx import Presentation
+    out = build_deck(write(tmp_path, simple_notebook(images=None)), tmp_path / "deck.pptx",
+                     author="An Author")
+    opener = Presentation(str(out)).slides[0]
+    assert opener.shapes.title is None
+    assert [shape.text_frame.text for shape in opener.shapes if shape.has_text_frame] \
+        == ["An Author"]
+
+
+def test_the_title_slide_can_be_omitted(tmp_path):
+    from pptx import Presentation
+    out = build_deck(write(tmp_path, simple_notebook(images=None)), tmp_path / "deck.pptx",
+                     title_slide=False)
+    assert len(Presentation(str(out)).slides) == 2       # section slide plus the one
