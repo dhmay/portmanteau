@@ -108,6 +108,9 @@ class Slide:
 
     title: str
     cells: dict = field(default_factory=lambda: {name: [] for name in SECTIONS})
+    #: a `# ` heading that appeared before this slide, emitted as a section slide ahead of it.
+    #: The notebook's first `# ` is its deck title and does not land here.
+    section_title: str | None = None
 
 
 def init_slide_nb(max_columns: int | None = None, width: int = 220) -> None:
@@ -156,13 +159,19 @@ def init_slide_nb(max_columns: int | None = None, width: int = 220) -> None:
 def read_notebook(path) -> tuple[str, list[Slide]]:
     """Parse an executed notebook into (deck title, slides), validating as it goes.
 
-    The deck title is the notebook's own `# ` heading - that one line, not the cell, whose remaining
-    paragraphs usually explain the format to whoever edits the notebook and have no place on a
-    slide.
+    The deck title is the notebook's **first** `# ` heading - that one line, not the cell, whose
+    remaining paragraphs usually explain the format to whoever edits the notebook and have no
+    place on a slide.
+
+    **A later `# ` heading starts a new section**, and is carried on the next slide's
+    `section_title` so that `build_deck` can put a section slide in front of it. One notebook can
+    therefore hold several sections, which is the alternative to splitting it into several
+    notebooks.
 
     Raises:
         DeckError: on an unknown `###` section, a slide with neither text nor images, a cell that
-            errored or was never executed, or an `### images` cell that produced no output.
+            errored or was never executed, an `### images` cell that produced no output, or a
+            `# ` heading with no slide after it.
     """
     import nbformat
 
@@ -172,17 +181,23 @@ def read_notebook(path) -> tuple[str, list[Slide]]:
     current: Slide | None = None
     section: str | None = None
     deck_title: str | None = None
+    pending_section: str | None = None
 
     for cell in notebook.cells:
         source = cell.source.strip()
         if cell.cell_type == "markdown":
             heading = source.split("\n", 1)[0].strip()
             body = source.split("\n", 1)[1].strip() if "\n" in source else ""
-            if heading.startswith("# ") and deck_title is None:
-                deck_title = heading[2:].strip()
+            if heading.startswith("# ") and not heading.startswith("## "):
+                if deck_title is None:
+                    deck_title = heading[2:].strip()
+                else:
+                    pending_section = heading[2:].strip()
+                section = None
                 continue
             if heading.startswith("## ") and not heading.startswith("### "):
-                current = Slide(title=heading[3:].strip())
+                current = Slide(title=heading[3:].strip(), section_title=pending_section)
+                pending_section = None
                 slides.append(current)
                 section = None
                 continue
@@ -203,6 +218,8 @@ def read_notebook(path) -> tuple[str, list[Slide]]:
 
     if deck_title is None:
         raise DeckError(f"{path.name}: no '# ' heading to take the deck title from")
+    if pending_section is not None:
+        raise DeckError(f"{path.name}: section '# {pending_section}' has no '## ' slide after it")
     for slide in slides:
         _validate(path.name, slide)
     return deck_title, slides
@@ -742,6 +759,9 @@ def build_deck(notebook, out, template=None, style: DeckStyle | None = None,
                 _add_section_slide(prs, layouts, deck_title, style)
                 labels.append(None)
             for index, slide in enumerate(slides):
+                if slide.section_title:
+                    _add_section_slide(prs, layouts, slide.section_title, style)
+                    labels.append(None)
                 _build_slide(prs, layouts, slide, directory, f"slide{index:02d}", path.name, style)
                 labels.append((path.name, slide.title))
         _check_overflow(prs, labels, style)

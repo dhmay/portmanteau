@@ -471,3 +471,40 @@ def test_the_title_slide_can_be_omitted(tmp_path):
     out = build_deck(write(tmp_path, simple_notebook(images=None)), tmp_path / "deck.pptx",
                      title_slide=False)
     assert len(Presentation(str(out)).slides) == 2       # section slide plus the one
+
+
+def two_section_notebook():
+    return notebook([
+        nbformat.v4.new_markdown_cell("# Deck title\n\nPreamble that never reaches a slide."),
+        nbformat.v4.new_markdown_cell("## First slide"),
+        nbformat.v4.new_markdown_cell("### text\n\n- one"),
+        nbformat.v4.new_markdown_cell("# Second section"),
+        nbformat.v4.new_markdown_cell("## Second slide"),
+        nbformat.v4.new_markdown_cell("### text\n\n- two"),
+    ])
+
+
+def test_a_later_hash_heading_starts_a_new_section(tmp_path):
+    title, slides = read_notebook(write(tmp_path, two_section_notebook()))
+    assert title == "Deck title"
+    assert [slide.section_title for slide in slides] == [None, "Second section"]
+
+
+def test_each_section_gets_its_own_section_slide(tmp_path):
+    from pptx import Presentation
+    out = build_deck(write(tmp_path, two_section_notebook()), tmp_path / "deck.pptx")
+    titles = [slide.shapes.title.text if slide.shapes.title is not None else None
+              for slide in Presentation(str(out)).slides]
+    # title slide, the deck's own section slide, slide one, the new section, slide two
+    assert titles == [None, "Deck title", "First slide", "Second section", "Second slide"]
+
+
+def test_a_trailing_section_heading_is_refused(tmp_path):
+    nb = notebook([
+        nbformat.v4.new_markdown_cell("# Deck title"),
+        nbformat.v4.new_markdown_cell("## Only slide"),
+        nbformat.v4.new_markdown_cell("### text\n\n- one"),
+        nbformat.v4.new_markdown_cell("# Section introducing nothing"),
+    ])
+    with pytest.raises(DeckError, match="has no '## ' slide after it"):
+        read_notebook(write(tmp_path, nb))
