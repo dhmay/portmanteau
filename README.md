@@ -1,14 +1,16 @@
 # portmanteau
 
 Small, portable Python utilities for data analysis: cached downloads, ROC metrics and
-plots, Hamming-1 sequence graphs, styling for plots, and slide decks built from notebooks.
+plots, Hamming-distance sequence pairs and graphs, styling for plots, and slide decks built from
+notebooks.
 
 ## Install
 
-Install from a tagged release, choosing the extras you need:
+Install from a tagged release, choosing the extras you need. Pick a tag from
+[releases](https://github.com/dhmay/portmanteau/releases):
 
 ```bash
-uv add "portmanteau[download,plots] @ git+https://github.com/dhmay/portmanteau@v0.1.1"
+uv add "portmanteau[download,plots] @ git+https://github.com/dhmay/portmanteau@<tag>"
 ```
 
 Or, if you're feeling lucky, install from main:
@@ -86,11 +88,28 @@ pairs = annotate_pairs(pairs, df, columns=["peptide", "subject"])          # add
 pairs = find_hamming1_pairs(df, "cdr3", annotation_columns=["peptide"])    # same, in one call
 ```
 
+**Across two dataframes**, one sequence from each — two repertoires, a query set against a
+reference, a database against a cohort. Pairs inside either frame are never computed:
+
+```python
+from portmanteau.sequence.hamming_pairs import find_hamming1_pairs_between, find_hamming_pairs_between
+
+pairs = find_hamming1_pairs_between(df_a, df_b, "cdr3")   # row_i is from df_a, row_j from df_b
+pairs = find_hamming_pairs_between(df_a, df_b, "cdr3", distance=2, group_cols=["subject"])
+```
+
+This needs its own entry point because `group_cols` can require two rows to *match* on a column
+but never to *differ*. ⚠️ Unlike the one-frame search, **the same sequence present in both frames
+is a real pair**, at distance 0: excluded by the default `exact=True`, and reported with
+`hamming_distance` 0 under `exact=False`.
+
+`examples/example_1hamming.ipynb` walks through all of this on eight hand-checkable sequences.
+
 Pair counts grow **quadratically**: ten times the sequences gives roughly a hundred times the
 pairs. `group_cols` is the lever against that, since pairing within each of k groups costs
-`k * (n/k)^2` rather than `n^2`. Where the result is still too large to hold, `iter_hamming_pairs`
-yields it in chunks, and `find_hamming_pairs(..., max_pairs=...)` raises instead of exhausting
-memory.
+`k * (n/k)^2` rather than `n^2`. Where the result is still too large to hold,
+`iter_hamming_pairs` and `iter_hamming_pairs_between` yield it in chunks, and `max_pairs=` raises
+instead of exhausting memory.
 
 **Hamming-1 sequence graphs:**
 

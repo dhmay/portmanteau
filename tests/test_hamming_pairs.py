@@ -2,6 +2,8 @@ import pandas as pd
 import pytest
 
 from portmanteau.sequence.hamming_pairs import (
+    find_hamming1_pairs_between,
+    find_hamming_pairs_between,
     annotate_pairs,
     find_hamming1_pairs,
     find_hamming_pairs,
@@ -172,3 +174,96 @@ def test_annotate_pairs_requires_a_unique_index(cdr3s):
     pairs = find_hamming1_pairs(cdr3s, "cdr3")
     with pytest.raises(ValueError, match="unique index"):
         annotate_pairs(pairs, cdr3s.set_index(pd.Index([1, 1, 2, 3, 4])), ["hla"])
+
+
+# --- pairs drawn one from each of two frames ------------------------------------------------
+
+
+@pytest.fixture
+def two_frames():
+    """Two frames sharing one sequence, with one cross pair and one pair inside each frame."""
+    pdf_a = pd.DataFrame({"cdr3": ["CASSAF", "CASSBF", "CASSZF"], "src": "a"})
+    pdf_b = pd.DataFrame({"cdr3": ["CASSAF", "CASSCF", "CQQQQF"], "src": "b"})
+    return pdf_a, pdf_b
+
+
+def test_between_pairs_only_across_the_frames(two_frames):
+    pdf_a, pdf_b = two_frames
+    pairs = find_hamming1_pairs_between(pdf_a, pdf_b, "cdr3")
+    got = set(zip(pairs.cdr3_i, pairs.cdr3_j))
+    # Every A sequence of the CASS_F shape is one substitution from every B one, except itself.
+    assert got == {("CASSAF", "CASSCF"), ("CASSBF", "CASSAF"), ("CASSBF", "CASSCF"),
+                   ("CASSZF", "CASSAF"), ("CASSZF", "CASSCF")}
+    # CASSAF/CASSBF are a within-A pair and must not appear; nor CASSAF/CASSCF as within-B.
+    assert ("CASSAF", "CASSBF") not in got
+
+
+def test_between_keeps_the_sides_in_order(two_frames):
+    pdf_a, pdf_b = two_frames
+    pairs = find_hamming1_pairs_between(pdf_a, pdf_b, "cdr3", annotation_columns=["src"])
+    assert set(pairs.src_i) == {"a"} and set(pairs.src_j) == {"b"}
+    assert pairs.row_i.isin(pdf_a.index).all() and pairs.row_j.isin(pdf_b.index).all()
+
+
+def test_between_excludes_identical_sequences_when_exact(two_frames):
+    """CASSAF is in both frames. At distance 1 exactly, it is not a pair with itself."""
+    pdf_a, pdf_b = two_frames
+    pairs = find_hamming1_pairs_between(pdf_a, pdf_b, "cdr3")
+    assert not ((pairs.cdr3_i == "CASSAF") & (pairs.cdr3_j == "CASSAF")).any()
+
+
+def test_between_surfaces_identical_sequences_at_distance_zero(two_frames):
+    """⚠️ Unlike the one-frame search, the same sequence in both frames is a real pair."""
+    pdf_a, pdf_b = two_frames
+    pairs = find_hamming_pairs_between(pdf_a, pdf_b, "cdr3", distance=1, exact=False)
+    shared = pairs[(pairs.cdr3_i == "CASSAF") & (pairs.cdr3_j == "CASSAF")]
+    assert len(shared) == 1 and shared.hamming_distance.tolist() == [0]
+
+
+def test_between_matches_brute_force(cdr3s):
+    pdf_a = cdr3s
+    pdf_b = pd.DataFrame({"cdr3": [s[:-1] + "W" for s in cdr3s.cdr3] + list(cdr3s.cdr3)})
+    pairs = find_hamming_pairs_between(pdf_a, pdf_b, "cdr3", distance=1)
+    got = set(zip(pairs.row_i, pairs.row_j))
+    expected = {
+        (i, j)
+        for i, x in pdf_a.cdr3.items()
+        for j, y in pdf_b.cdr3.items()
+        if len(x) == len(y) and sum(p != q for p, q in zip(x, y)) == 1
+    }
+    assert got == expected
+
+
+def test_between_group_cols_needs_the_group_in_both_frames():
+    pdf_a = pd.DataFrame({"cdr3": ["CASSAF", "CASSBF"], "subject": ["s1", "s2"]})
+    pdf_b = pd.DataFrame({"cdr3": ["CASSCF", "CASSDF"], "subject": ["s1", "s3"]})
+    pairs = find_hamming1_pairs_between(pdf_a, pdf_b, "cdr3", group_cols=["subject"])
+    # s2 and s3 have no counterpart, so only the s1 pair survives.
+    assert set(zip(pairs.cdr3_i, pairs.cdr3_j)) == {("CASSAF", "CASSCF")}
+
+
+def test_between_empty_frame_keeps_the_columns(two_frames):
+    pdf_a, _ = two_frames
+    pairs = find_hamming1_pairs_between(pdf_a, pdf_a.iloc[:0], "cdr3")
+    assert len(pairs) == 0
+    assert list(pairs.columns) == ["row_i", "row_j", "cdr3_i", "cdr3_j", "seq_length",
+                                   "differing_position"]
+
+
+def test_between_max_pairs_raises(two_frames):
+    pdf_a, pdf_b = two_frames
+    with pytest.raises(ValueError, match="max_pairs"):
+        find_hamming1_pairs_between(pdf_a, pdf_b, "cdr3", max_pairs=1)
+
+
+def test_one_frame_search_is_unchanged_by_the_cover(cdr3s):
+    """The one-frame path now runs through the two-frame routine; it must give the same answer."""
+    pairs = find_hamming1_pairs(cdr3s, "cdr3")
+    expected = {
+        tuple(sorted((i, j)))
+        for i, x in cdr3s.cdr3.items()
+        for j, y in cdr3s.cdr3.items()
+        if i != j and len(x) == len(y) and sum(p != q for p, q in zip(x, y)) == 1
+    }
+    assert {tuple(sorted(p)) for p in zip(pairs.row_i, pairs.row_j)} == expected
+    assert len(pairs) == len(expected), "each pair exactly once, not in both orientations"
