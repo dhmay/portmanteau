@@ -410,72 +410,71 @@ def _iter_close_sequence_pairs(
 ) -> Iterable[tuple[int, int, tuple[int, ...]]]:
     """Yield (id_i, id_j, differing positions) for close equal-length sequences.
 
-    Buckets sequences on every combination of `distance` masked positions. Two sequences sharing a
-    bucket differ only within those positions, so their true differing positions are found by
-    comparing just those.
+    Buckets sequences by a masked copy of themselves: for one combination of `distance` positions,
+    the sequence with those positions removed is a key, and any two sequences sharing a key differ
+    only within those positions. Checking that they differ at *all* of them gives exactly-distance
+    pairs.
 
     With `sequences_b`, ids on each side index their own list and every pair is drawn one from
     each. Without it, both ids index `sequences_a` and each unordered pair is yielded once, with
     ``id_i < id_j``.
 
     Each pair is yielded once. When `exact`, a pair is emitted from the single bucket whose mask is
-    its differing positions. Otherwise a pair differing at fewer positions would appear in several
-    buckets, so it is emitted only from the canonical one: its differing positions padded with the
-    lowest unused positions. That keeps the pass stateless either way - no set of seen pairs, which
-    at these counts would dominate memory.
+    its differing positions. Otherwise a pair differing at fewer positions would appear under
+    several masks, so it is emitted only from the canonical one: its differing positions padded
+    with the lowest unused positions. That keeps the pass stateless either way - no set of seen
+    pairs, which at these counts would dominate memory.
+
+    One mask is bucketed at a time, rather than all of them into one dict. Two reasons, both
+    measured: the key is then the masked string alone rather than a (positions, masked) tuple,
+    which is most of the cost at this scale; and only one mask's buckets are live at once, where
+    holding all of them meant seq_len times as many - 559k entries for 40k CDR3s.
     """
     same_list = sequences_b is None
     if not sequences_a or (not same_list and not sequences_b):
         return
     seq_len = len(sequences_a[0])
-
-    # One bucket per masked key, holding the ids from each side that landed in it. Building the
-    # keys dominates the cost, so the two sides share one pass and one dict.
-    masked_buckets: dict[tuple[tuple[int, ...], str], tuple[list[int], list[int]]] = defaultdict(
-        lambda: ([], [])
-    )
+    if seq_len <= distance:
+        return
     sides = ((0, sequences_a),) if same_list else ((0, sequences_a), (1, sequences_b))
-    # Masking is where nearly all the time goes - every sequence is rewritten once per mask - so
-    # distance 1, by far the common case, gets a loop that slices instead of rebuilding the string
-    # character by character. Measured on 40k CDR3s: 7.8x faster to build the keys, which is ~88%
-    # of the work, so ~4x end to end. The branch is hoisted out of the sequence loop deliberately.
-    masks = None if distance == 1 else list(combinations(range(seq_len), distance))
-    for side, sequences in sides:
-        bucket_side = side
-        if masks is None:
-            for seq_id, sequence in enumerate(sequences):
-                for i in range(seq_len):
-                    masked_buckets[((i,), sequence[:i] + sequence[i + 1 :])][bucket_side].append(
-                        seq_id
-                    )
-        else:
-            for seq_id, sequence in enumerate(sequences):
-                for positions in masks:
-                    masked = "".join(c for i, c in enumerate(sequence) if i not in positions)
-                    masked_buckets[(positions, masked)][bucket_side].append(seq_id)
 
-    for (positions, _masked), (ids_a, ids_b) in masked_buckets.items():
-        # combinations() rather than product() when both sides are the same list: it is what makes
-        # covering the one-list case with this routine free rather than twice the work, because a
-        # singleton bucket then costs no comparison at all instead of comparing a sequence with
-        # itself. Measured on 112k CDR3s: product 2.00x the one-list cost, combinations 1.00x.
-        if same_list:
-            if len(ids_a) < 2:
-                continue
-            pairs: Iterable[tuple[int, int]] = combinations(ids_a, 2)
+    for positions in combinations(range(seq_len), distance):
+        buckets: dict[str, tuple[list[int], list[int]]] = defaultdict(lambda: ([], []))
+        if distance == 1:
+            # Slicing, rather than rebuilding the string character by character: masking is where
+            # nearly all the time goes, and distance 1 is by far the common case.
+            cut = positions[0]
+            for side, sequences in sides:
+                for seq_id, sequence in enumerate(sequences):
+                    buckets[sequence[:cut] + sequence[cut + 1 :]][side].append(seq_id)
         else:
-            if not ids_a or not ids_b:
-                continue
-            pairs = product(ids_a, ids_b)
-        for id_i, id_j in pairs:
-            seq_i = sequences_a[id_i]
-            seq_j = sequences_a[id_j] if same_list else sequences_b[id_j]
-            differing = tuple(p for p in positions if seq_i[p] != seq_j[p])
-            if exact:
-                if len(differing) == distance:
+            kept = [i for i in range(seq_len) if i not in positions]
+            for side, sequences in sides:
+                for seq_id, sequence in enumerate(sequences):
+                    buckets["".join([sequence[i] for i in kept])][side].append(seq_id)
+
+        for ids_a, ids_b in buckets.values():
+            # combinations() rather than product() when both sides are the same list: it is what
+            # makes covering the one-list case with this routine free rather than twice the work,
+            # because a singleton bucket then costs no comparison at all instead of comparing a
+            # sequence with itself. Measured on 112k CDR3s: product 2.00x, combinations 1.00x.
+            if same_list:
+                if len(ids_a) < 2:
+                    continue
+                pairs: Iterable[tuple[int, int]] = combinations(ids_a, 2)
+            else:
+                if not ids_a or not ids_b:
+                    continue
+                pairs = product(ids_a, ids_b)
+            for id_i, id_j in pairs:
+                seq_i = sequences_a[id_i]
+                seq_j = sequences_a[id_j] if same_list else sequences_b[id_j]
+                differing = tuple(p for p in positions if seq_i[p] != seq_j[p])
+                if exact:
+                    if len(differing) == distance:
+                        yield id_i, id_j, differing
+                elif positions == _canonical_mask(differing, distance, seq_len):
                     yield id_i, id_j, differing
-            elif positions == _canonical_mask(differing, distance, seq_len):
-                yield id_i, id_j, differing
 
 
 def _canonical_mask(differing: tuple[int, ...], distance: int, seq_len: int) -> tuple[int, ...]:
