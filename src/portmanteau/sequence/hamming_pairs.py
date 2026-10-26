@@ -12,6 +12,14 @@ sharing a key differ only within those positions. Checking that they differ at *
 exactly-`distance` pairs, and means each pair surfaces from exactly one bucket, so no
 deduplication state is needed.
 
+**Masking, not pairing, is where the time goes** at the sizes these are used at. Bucketing one
+mask at a time keeps the key a plain string and holds only that mask's buckets, which on 40k
+CDR3s is 2.3x faster and uses a third of the memory of bucketing every mask into one dict. That
+also means avoiding the wasted within-source pairs is worth very little on its own: searching two
+frames directly rather than concatenating them and discarding the same-frame pairs saves about 3%,
+because the two do the same number of maskings. The two-frame entry points are there for what they
+let you express, not for speed.
+
 **Pair counts grow quadratically with the number of sequences.** Doubling the input roughly
 quadruples the output, which is easy to underestimate: a dataset ten times larger yields a hundred
 times the pairs. `group_cols` is the main lever against this, because finding pairs within each of
