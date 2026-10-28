@@ -58,10 +58,10 @@ import tempfile
 from dataclasses import dataclass, field
 from io import StringIO
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, NamedTuple
 
 __all__ = ["DeckError", "DeckStyle", "Slide", "build_deck", "init_slide_nb", "read_notebook",
-           "inline_runs", "parse_bullets"]
+           "Run", "inline_runs", "parse_bullets"]
 
 SECTIONS = ("prep", "text", "images", "notes")
 EMU_PER_INCH = 914400
@@ -248,27 +248,54 @@ def _validate(source: str, slide: Slide) -> None:
 
 # --------------------------------------------------------------------------- markdown
 
-INLINE = re.compile(r"(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`)")
+#: The link alternative comes first so a URL containing `*` or a backtick is matched whole
+#: rather than being carved up by the emphasis patterns.
+INLINE = re.compile(r"(\[[^\]]+\]\([^)]+\)|\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`)")
+LINK = re.compile(r"^\[([^\]]+)\]\(([^)]+)\)$")
 
 
-def inline_runs(text: str) -> list[tuple[str, bool, bool]]:
-    """Split a line into (text, bold, italic) runs. Backticked code is kept verbatim.
+class Run(NamedTuple):
+    """One span of a bullet, with the formatting it carries.
+
+    A tuple, and the first three fields are in the order they have always been in, so
+    `text, bold, italic, _ = run` and `run[0]` both still work. ⚠️ Unpacking into exactly three
+    names does not - that is the one break in widening this from a 3-tuple.
+    """
+
+    text: str
+    bold: bool = False
+    italic: bool = False
+    url: str | None = None
+
+
+def inline_runs(text: str) -> list[Run]:
+    """Split a line into formatting runs. Backticked code is kept verbatim.
 
     python-pptx writes runs verbatim, so `**bold**` would otherwise arrive on the slide as four
-    asterisks.
+    asterisks, and `[text](url)` as its own source.
+
+    ⚠️ **Markup does not nest.** `[**bold link**](url)` gives a link whose text is literally
+    `**bold link**`; the link pattern is matched first and its contents are not re-scanned. The
+    same goes for emphasis inside code.
+
+    ⚠️ **Only bullets get this.** Table cells are written from the frame's own values, so a link
+    in a DataFrame stays text.
     """
     runs = []
     for piece in INLINE.split(text):
         if not piece:
             continue
-        if piece.startswith("**") and piece.endswith("**"):
-            runs.append((piece[2:-2], True, False))
+        link = LINK.match(piece)
+        if link:
+            runs.append(Run(link.group(1), url=link.group(2)))
+        elif piece.startswith("**") and piece.endswith("**"):
+            runs.append(Run(piece[2:-2], bold=True))
         elif piece.startswith("*") and piece.endswith("*") and len(piece) > 2:
-            runs.append((piece[1:-1], False, True))
+            runs.append(Run(piece[1:-1], italic=True))
         elif piece.startswith("`") and piece.endswith("`"):
-            runs.append((piece[1:-1], False, False))
+            runs.append(Run(piece[1:-1]))
         else:
-            runs.append((piece, False, False))
+            runs.append(Run(piece))
     return runs
 
 
@@ -415,11 +442,16 @@ def _write_bullets(placeholder, bullets, size: int) -> None:
         para.level = level
         if not is_bullet:
             _suppress_bullet(para)
-        for text, bold, italic in runs:
+        for spec in runs:
+            # Indexed rather than unpacked so a plain 3-tuple from older code still works.
             run = para.add_run()
-            run.text = text
-            run.font.bold, run.font.italic = bold, italic
+            run.text = spec[0]
+            run.font.bold, run.font.italic = spec[1], spec[2]
             run.font.size = Pt(size if level == 0 else size - 2)
+            url = spec[3] if len(spec) > 3 else None
+            if url:
+                # PowerPoint styles this from the theme's hyperlink colour.
+                run.hyperlink.address = url
 
 
 def _place_picture(slide_obj, path: Path, left, top, width, height) -> None:
