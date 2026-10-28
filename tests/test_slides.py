@@ -18,7 +18,8 @@ pytest.importorskip("lxml")
 pd = pytest.importorskip("pandas")
 
 from portmanteau.slides.notebook_deck import (  # noqa: E402
-    DeckError, DeckStyle, build_deck, estimate_height, inline_runs, parse_bullets, read_notebook)
+    DeckError, DeckStyle, Run, build_deck, estimate_height, inline_runs, parse_bullets,
+    read_notebook)
 
 
 # --------------------------------------------------------------------------- helpers
@@ -128,8 +129,57 @@ def test_slide_needs_text_or_images(tmp_path):
 
 def test_inline_runs_splits_emphasis_and_code():
     assert inline_runs("plain **bold** and *italic* and `code`") == [
-        ("plain ", False, False), ("bold", True, False), (" and ", False, False),
-        ("italic", False, True), (" and ", False, False), ("code", False, False)]
+        Run("plain "), Run("bold", bold=True), Run(" and "),
+        Run("italic", italic=True), Run(" and "), Run("code")]
+
+
+def test_inline_runs_turns_a_markdown_link_into_a_run_with_a_url():
+    """Otherwise the whole `[text](url)` arrives on the slide as its own source."""
+    assert inline_runs("see [the paper](https://example.org/a_b) for detail") == [
+        Run("see "), Run("the paper", url="https://example.org/a_b"), Run(" for detail")]
+
+
+def test_a_url_containing_emphasis_characters_survives():
+    """The link alternative is matched first, so a `*` in a URL is not read as emphasis."""
+    (run,) = inline_runs("[x](https://example.org/a*b*c)")
+    assert run == Run("x", url="https://example.org/a*b*c")
+
+
+def test_markup_does_not_nest_inside_a_link():
+    """Documented limitation: the link's contents are not re-scanned."""
+    (run,) = inline_runs("[**bold**](http://x)")
+    assert run.text == "**bold**" and run.url == "http://x"
+
+
+def test_a_bare_bracket_is_not_a_link():
+    assert inline_runs("counts [see notes] rise") == [Run("counts [see notes] rise")]
+
+
+def test_runs_keep_the_first_three_fields_in_place():
+    """Widening the tuple must not move `text`, `bold` or `italic`."""
+    run = Run("t", bold=True, italic=False, url="u")
+    assert run[0] == "t" and run[1] is True and run[2] is False and run[3] == "u"
+
+
+def test_a_link_run_renders_as_a_hyperlink(tmp_path):
+    """End to end: the address has to reach the pptx, not just the parse tree."""
+    from pptx import Presentation
+
+    nb = notebook([
+        nbformat.v4.new_markdown_cell("# Deck title"),
+        nbformat.v4.new_markdown_cell("## First slide"),
+        nbformat.v4.new_markdown_cell(
+            "### text\n\n- see [the paper](https://example.org/p) for detail"),
+    ])
+    out = build_deck(write(tmp_path, nb), out=tmp_path / "deck.pptx")
+    addresses = [run.hyperlink.address
+                 for slide in Presentation(str(out)).slides
+                 for shape in slide.shapes if shape.has_text_frame
+                 for para in shape.text_frame.paragraphs for run in para.runs]
+    assert "https://example.org/p" in addresses
+    assert "[the paper]" not in "".join(
+        shape.text_frame.text for slide in Presentation(str(out)).slides
+        for shape in slide.shapes if shape.has_text_frame)
 
 
 def test_blank_line_closes_a_bullet():
@@ -144,7 +194,7 @@ def test_emphasis_wrapping_a_line_break_is_parsed():
     """Continuations are joined before inline markup is parsed."""
     blocks = [("markdown", "- the rate among pairs *close\n  enough to count*, not the rest", None)]
     (runs, _, _), = parse_bullets(blocks)
-    assert ("close enough to count", False, True) in runs
+    assert Run("close enough to count", italic=True) in runs
     assert "*" not in "".join(run[0] for run in runs)
 
 
