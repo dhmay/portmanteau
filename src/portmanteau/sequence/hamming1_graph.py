@@ -184,9 +184,10 @@ def build_seq_ham1_graph(
         pdf_tcrs (DataFrame): DataFrame of TCRs
         seq_column (str, optional): sequence column. Defaults to "cdr3".
         attribute_columns (List[str], optional): columns to use as node attributes. Defaults to None.
-            Regardless of what's specified here, vfamily and jfamily will always be added as node
-            attributes, derived from the sequence column. That's because they're so often useful,
-            but it's probably a bad idea.
+            Regardless of what's specified here, vfamily and jfamily are added as node attributes,
+            taken from pdf_tcrs where it has a column of that name and otherwise derived from the
+            sequence column. ⚠️ The derivation reads a "seq+vgene+jgene" sequence and gives
+            "unknown" for any other shape, which is why a column the caller supplies wins.
 
     Returns:
         NxGraph: Networkx graph of hamming-1 connections between sequences
@@ -203,20 +204,26 @@ def build_seq_ham1_graph(
 
     G = nx.Graph()
 
+    # vfamily and jfamily are parsed out of the sequence, but only for the one the caller has not
+    # supplied. ⚠️ The parse reads a "seq+vgene+jgene" sequence and yields "unknown" for anything
+    # else, so overriding a real column with it replaced data with a guess.
+    parsed = [c for c in ("vfamily", "jfamily") if c not in pdf_tcrs.columns]
+    supplied = [c for c in ("vfamily", "jfamily") if c in pdf_tcrs.columns]
+
     for seq in all_seqs:
         chunks = seq.split("+")
         if len(chunks) == 3:
             _, vgene, jgene = chunks
         else:
             vgene = jgene = "unknown"
-        vfamily = vgene.split("-")[0]
-        jfamily = jgene.split("-")[0]
-        G.add_node(seq, vfamily=vfamily, jfamily=jfamily)
+        families = {"vfamily": vgene.split("-")[0], "jfamily": jgene.split("-")[0]}
+        G.add_node(seq, **{c: families[c] for c in parsed})
 
     # if there are other attributes to add, we have to get a little clever, because we haven't explicitly
     # verified that sequence is unique. We'll just take the first value for each sequence
-    if attribute_columns is not None:
-        attrs = [a for a in attribute_columns if a not in ("vfamily", "jfamily")]
+    attrs = [a for a in (attribute_columns or []) if a not in parsed]
+    attrs += [c for c in supplied if c not in attrs]
+    if attrs:
         pdf_first = pdf_tcrs.drop_duplicates(seq_column).set_index(seq_column)[attrs]
         nx.set_node_attributes(G, pdf_first.to_dict(orient="index"))
 

@@ -180,3 +180,24 @@ def test_plot_graph_tolerates_a_missing_value_on_some_nodes(tcrs):
         node_color_map={"A1": "#112233", "A2": "#445566"}, show_legend=True,
     )
     assert [t.get_text() for t in ax.get_legend().get_texts()] == ["A1", "A2", "other"]
+
+
+def test_build_graph_keeps_a_supplied_vfamily(tcrs):
+    """A caller's own vfamily column is data; the sequence parse is a guess and must not win."""
+    own = tcrs.assign(vfamily=["MINE-1", "MINE-1", "MINE-2", "MINE-3"])
+    G = hg.build_seq_ham1_graph(own, seq_column="junc", attribute_columns=["hla"])
+    assert G.nodes["CASS+TRBV5-1+TRBJ2-1"]["vfamily"] == "MINE-1"
+    # jfamily was not supplied, so it is still parsed out of the sequence
+    assert G.nodes["CASS+TRBV5-1+TRBJ2-1"]["jfamily"] == "TRBJ2"
+
+
+def test_build_graph_supplied_vfamily_needs_no_attribute_columns(tcrs):
+    own = tcrs.assign(vfamily=["MINE-1", "MINE-1", "MINE-2", "MINE-3"])
+    G = hg.build_seq_ham1_graph(own, seq_column="junc")
+    assert G.nodes["CATT+TRBV6-2+TRBJ1-1"]["vfamily"] == "MINE-2"
+
+
+def test_build_graph_listing_an_absent_family_column_still_parses(tcrs):
+    """Naming vfamily when the frame has none keeps the parsed value rather than raising."""
+    G = hg.build_seq_ham1_graph(tcrs, seq_column="junc", attribute_columns=["vfamily"])
+    assert G.nodes["CASS+TRBV5-1+TRBJ2-1"]["vfamily"] == "TRBV5"
