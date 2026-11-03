@@ -52,13 +52,22 @@ def build_and_plot_seq_ham1_graph(
         legend_bbox_to_anchor (Tuple[float, float], optional): legend location. Defaults to (1.03, 1.0).
         legend_loc (str, optional): legend anchor. Defaults to 'upper left'.
         seq_column (str, optional): sequence column. Defaults to "cdr3".
-        attribute_columns (List[str], optional): columns to use as node attributes. Defaults to None.
+        attribute_columns (List[str], optional): columns to use as node attributes. Defaults to
+            None, which carries exactly the attributes the plot needs - whichever of
+            node_color_attribute and node_size_attribute were given. Pass a list to put more on
+            the returned graph for your own later use.
         title (str, optional): title. Defaults to "Hamming-1 connection graph".
         legend_title (str, optional): heading for the legend. Defaults to None.
 
     Returns:
         Tuple[NxGraph, plt.Figure, plt.Axes]: Graph, Figure and Axes
     """
+    if attribute_columns is None:
+        # Nothing to carry but what the plot consumes, so the caller does not have to name the
+        # same attribute twice. ⚠️ Forgetting it used to be silent: every node took None, so the
+        # whole graph came out one colour with a blank legend entry.
+        inferred = [a for a in (node_color_attribute, node_size_attribute) if a is not None]
+        attribute_columns = inferred or None
     G = build_seq_ham1_graph(
         pdf_tcrs, seq_column=seq_column, attribute_columns=attribute_columns
     )
@@ -254,6 +263,9 @@ def plot_seq_ham1_graph(
         legend_bbox_to_anchor (Tuple[float, float], optional): legend location. Defaults to (1.03, 1.0).
         legend_loc (str, optional): legend anchor. Defaults to 'upper left'.
         title (str, optional): title. Defaults to "Hamming-1 connection graph".
+        node_color_attribute raises if no node carries it at all. Nodes that individually lack a
+            value are drawn in other_color rather than rejected, since a missing value can be
+            real data.
         node_color_map (dict, optional): explicit value -> color. Any attribute value not in it is
             drawn in other_color and collected under other_label in the legend. Defaults to None,
             which colors every distinct value from the seaborn palette.
@@ -281,6 +293,11 @@ def plot_seq_ham1_graph(
         # Define the node colors based on the attribute, in G's node order (which is what
         # draw_networkx_nodes uses)
         node_color_vals = [G.nodes[n].get(node_color_attribute) for n in G]
+        if all(v is None for v in node_color_vals):
+            raise ValueError(
+                f"no node carries a {node_color_attribute!r} attribute, so every node would be "
+                "drawn in one colour; pass it in build_seq_ham1_graph's attribute_columns"
+            )
         ordered_unique_color_vals, colors_inorder = _color_scheme(
             node_color_vals, node_color_map, max_color_values, other_color, other_label
         )

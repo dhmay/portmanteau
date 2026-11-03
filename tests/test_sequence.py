@@ -116,8 +116,13 @@ def test_plot_graph_node_size_constant_attribute_is_mid_range(tcrs):
 
 
 def test_plot_graph_node_size_errors(tcrs):
-    with pytest.raises(ValueError, match="have no 'cells' attribute"):
+    # Naming a column the frame does not have now fails at the source, in the builder.
+    with pytest.raises(KeyError):
         hg.build_and_plot_seq_ham1_graph(tcrs, seq_column="junc", node_size_attribute="cells")
+    # Naming an attribute the graph does not carry fails in the plotter.
+    G = hg.build_seq_ham1_graph(tcrs, seq_column="junc")
+    with pytest.raises(ValueError, match="have no 'cells' attribute"):
+        hg.plot_seq_ham1_graph(G, node_size_attribute="cells")
     sized = tcrs.assign(cells=[1, 2, 3, 4])
     with pytest.raises(ValueError, match="node_size_scale"):
         hg.build_and_plot_seq_ham1_graph(
@@ -147,3 +152,31 @@ def test_build_and_plot_forwards_legend_title(tcrs):
         show_legend=True, legend_title="HLA",
     )
     assert ax.get_legend().get_title().get_text() == "HLA"
+
+
+def test_build_and_plot_infers_attribute_columns(tcrs):
+    """The colour and size attributes are carried without naming them twice."""
+    sized = tcrs.assign(cells=[1, 2, 3, 4])
+    _, _, ax = hg.build_and_plot_seq_ham1_graph(
+        sized, seq_column="junc", node_color_attribute="hla", node_size_attribute="cells",
+        node_size_range=(10.0, 100.0), node_size_scale="linear", show_legend=True,
+    )
+    assert [t.get_text() for t in ax.get_legend().get_texts()] == ["A1", "A2"]
+    assert sorted(_node_collection(ax).get_sizes()) == pytest.approx([10.0, 40.0, 70.0, 100.0])
+
+
+def test_plot_graph_rejects_a_colour_attribute_no_node_carries(tcrs):
+    G = hg.build_seq_ham1_graph(tcrs, seq_column="junc")   # no attributes carried
+    with pytest.raises(ValueError, match="no node carries a 'hla' attribute"):
+        hg.plot_seq_ham1_graph(G, node_color_attribute="hla")
+
+
+def test_plot_graph_tolerates_a_missing_value_on_some_nodes(tcrs):
+    """A value that is absent on one node is data, not a wiring error: it goes to 'other'."""
+    partial = tcrs.copy()
+    partial.loc[0, "hla"] = None
+    _, _, ax = hg.build_and_plot_seq_ham1_graph(
+        partial, seq_column="junc", node_color_attribute="hla",
+        node_color_map={"A1": "#112233", "A2": "#445566"}, show_legend=True,
+    )
+    assert [t.get_text() for t in ax.get_legend().get_texts()] == ["A1", "A2", "other"]
