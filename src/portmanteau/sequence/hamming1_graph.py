@@ -27,6 +27,7 @@ def build_and_plot_seq_ham1_graph(
     seq_column: str = "cdr3",
     attribute_columns: Optional[List[str]] = None,
     title: str = "Hamming-1 connection graph",
+    legend_title: Optional[str] = None,
     node_color_map: Optional[Dict[Any, Any]] = None,
     max_color_values: Optional[int] = None,
     other_color: Any = "0.72",
@@ -53,6 +54,7 @@ def build_and_plot_seq_ham1_graph(
         seq_column (str, optional): sequence column. Defaults to "cdr3".
         attribute_columns (List[str], optional): columns to use as node attributes. Defaults to None.
         title (str, optional): title. Defaults to "Hamming-1 connection graph".
+        legend_title (str, optional): heading for the legend. Defaults to None.
 
     Returns:
         Tuple[NxGraph, plt.Figure, plt.Axes]: Graph, Figure and Axes
@@ -72,6 +74,7 @@ def build_and_plot_seq_ham1_graph(
         legend_bbox_to_anchor=legend_bbox_to_anchor,
         legend_loc=legend_loc,
         title=title,
+        legend_title=legend_title,
         node_color_map=node_color_map,
         max_color_values=max_color_values,
         other_color=other_color,

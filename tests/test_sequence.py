@@ -139,3 +139,11 @@ def test_plot_graph_layout_seed_is_reproducible(tcrs):
     assert _node_collection(ax1).get_offsets().data == pytest.approx(
         _node_collection(ax2).get_offsets().data
     )
+
+
+def test_build_and_plot_forwards_legend_title(tcrs):
+    _, _, ax = hg.build_and_plot_seq_ham1_graph(
+        tcrs, seq_column="junc", attribute_columns=["hla"], node_color_attribute="hla",
+        show_legend=True, legend_title="HLA",
+    )
+    assert ax.get_legend().get_title().get_text() == "HLA"
