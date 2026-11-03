@@ -46,3 +46,158 @@ def test_plot_graph(tcrs):
     _, f2, _ = hg.build_and_plot_seq_ham1_graph(tcrs, seq_column="junc")
     assert f1 is not f2
     assert [t.get_text() for t in ax1.get_legend().get_texts()] == ["A1", "A2"]
+
+
+def _node_collection(ax):
+    """The PathCollection holding the nodes, which is drawn before the edges."""
+    from matplotlib.collections import PathCollection
+
+    return next(c for c in ax.collections if isinstance(c, PathCollection))
+
+
+def test_plot_graph_default_sizes_unchanged(tcrs):
+    """The golden case: without the new arguments every node keeps the scalar size."""
+    _, _, ax = hg.build_and_plot_seq_ham1_graph(tcrs, seq_column="junc", node_size=25)
+    assert set(_node_collection(ax).get_sizes()) == {25}
+
+
+def test_plot_graph_color_map_sends_unmapped_to_other(tcrs):
+    _, _, ax = hg.build_and_plot_seq_ham1_graph(
+        tcrs,
+        seq_column="junc",
+        attribute_columns=["hla"],
+        node_color_attribute="hla",
+        node_color_map={"A1": "#112233"},
+        show_legend=True,
+    )
+    assert [t.get_text() for t in ax.get_legend().get_texts()] == ["A1", "other"]
+
+
+def test_plot_graph_max_color_values_keeps_the_commonest(tcrs):
+    # Three A1 nodes against one A2, so A1 is the value that keeps a color of its own.
+    skewed = tcrs.copy()
+    skewed["hla"] = ["A1", "A1", "A1", "A2"]
+    _, _, ax = hg.build_and_plot_seq_ham1_graph(
+        skewed,
+        seq_column="junc",
+        attribute_columns=["hla"],
+        node_color_attribute="hla",
+        max_color_values=1,
+        show_legend=True,
+    )
+    assert [t.get_text() for t in ax.get_legend().get_texts()] == ["A1", "other"]
+
+
+def test_plot_graph_node_size_attribute(tcrs):
+    sized = tcrs.assign(cells=[1, 4, 9, 16])
+    _, _, ax = hg.build_and_plot_seq_ham1_graph(
+        sized,
+        seq_column="junc",
+        attribute_columns=["cells"],
+        node_size_attribute="cells",
+        node_size_range=(10.0, 100.0),
+        node_size_scale="sqrt",
+    )
+    sizes = sorted(_node_collection(ax).get_sizes())
+    # sqrt(1,4,9,16) = 1,2,3,4 spread evenly onto (10, 100)
+    assert sizes == pytest.approx([10.0, 40.0, 70.0, 100.0])
+
+
+def test_plot_graph_node_size_constant_attribute_is_mid_range(tcrs):
+    flat = tcrs.assign(cells=[3, 3, 3, 3])
+    _, _, ax = hg.build_and_plot_seq_ham1_graph(
+        flat,
+        seq_column="junc",
+        attribute_columns=["cells"],
+        node_size_attribute="cells",
+        node_size_range=(10.0, 100.0),
+    )
+    assert set(_node_collection(ax).get_sizes()) == {55.0}
+
+
+def test_plot_graph_node_size_errors(tcrs):
+    # Naming a column the frame does not have now fails at the source, in the builder.
+    with pytest.raises(KeyError):
+        hg.build_and_plot_seq_ham1_graph(tcrs, seq_column="junc", node_size_attribute="cells")
+    # Naming an attribute the graph does not carry fails in the plotter.
+    G = hg.build_seq_ham1_graph(tcrs, seq_column="junc")
+    with pytest.raises(ValueError, match="have no 'cells' attribute"):
+        hg.plot_seq_ham1_graph(G, node_size_attribute="cells")
+    sized = tcrs.assign(cells=[1, 2, 3, 4])
+    with pytest.raises(ValueError, match="node_size_scale"):
+        hg.build_and_plot_seq_ham1_graph(
+            sized, seq_column="junc", attribute_columns=["cells"],
+            node_size_attribute="cells", node_size_scale="cubic",
+        )
+    negative = tcrs.assign(cells=[-1, 2, 3, 4])
+    with pytest.raises(ValueError, match="non-negative"):
+        hg.build_and_plot_seq_ham1_graph(
+            negative, seq_column="junc", attribute_columns=["cells"],
+            node_size_attribute="cells", node_size_scale="sqrt",
+        )
+
+
+def test_plot_graph_layout_seed_is_reproducible(tcrs):
+    G = hg.build_seq_ham1_graph(tcrs, seq_column="junc")
+    _, ax1 = hg.plot_seq_ham1_graph(G, layout_seed=0)
+    _, ax2 = hg.plot_seq_ham1_graph(G, layout_seed=0)
+    assert _node_collection(ax1).get_offsets().data == pytest.approx(
+        _node_collection(ax2).get_offsets().data
+    )
+
+
+def test_build_and_plot_forwards_legend_title(tcrs):
+    _, _, ax = hg.build_and_plot_seq_ham1_graph(
+        tcrs, seq_column="junc", attribute_columns=["hla"], node_color_attribute="hla",
+        show_legend=True, legend_title="HLA",
+    )
+    assert ax.get_legend().get_title().get_text() == "HLA"
+
+
+def test_build_and_plot_infers_attribute_columns(tcrs):
+    """The colour and size attributes are carried without naming them twice."""
+    sized = tcrs.assign(cells=[1, 2, 3, 4])
+    _, _, ax = hg.build_and_plot_seq_ham1_graph(
+        sized, seq_column="junc", node_color_attribute="hla", node_size_attribute="cells",
+        node_size_range=(10.0, 100.0), node_size_scale="linear", show_legend=True,
+    )
+    assert [t.get_text() for t in ax.get_legend().get_texts()] == ["A1", "A2"]
+    assert sorted(_node_collection(ax).get_sizes()) == pytest.approx([10.0, 40.0, 70.0, 100.0])
+
+
+def test_plot_graph_rejects_a_colour_attribute_no_node_carries(tcrs):
+    G = hg.build_seq_ham1_graph(tcrs, seq_column="junc")   # no attributes carried
+    with pytest.raises(ValueError, match="no node carries a 'hla' attribute"):
+        hg.plot_seq_ham1_graph(G, node_color_attribute="hla")
+
+
+def test_plot_graph_tolerates_a_missing_value_on_some_nodes(tcrs):
+    """A value that is absent on one node is data, not a wiring error: it goes to 'other'."""
+    partial = tcrs.copy()
+    partial.loc[0, "hla"] = None
+    _, _, ax = hg.build_and_plot_seq_ham1_graph(
+        partial, seq_column="junc", node_color_attribute="hla",
+        node_color_map={"A1": "#112233", "A2": "#445566"}, show_legend=True,
+    )
+    assert [t.get_text() for t in ax.get_legend().get_texts()] == ["A1", "A2", "other"]
+
+
+def test_build_graph_keeps_a_supplied_vfamily(tcrs):
+    """A caller's own vfamily column is data; the sequence parse is a guess and must not win."""
+    own = tcrs.assign(vfamily=["MINE-1", "MINE-1", "MINE-2", "MINE-3"])
+    G = hg.build_seq_ham1_graph(own, seq_column="junc", attribute_columns=["hla"])
+    assert G.nodes["CASS+TRBV5-1+TRBJ2-1"]["vfamily"] == "MINE-1"
+    # jfamily was not supplied, so it is still parsed out of the sequence
+    assert G.nodes["CASS+TRBV5-1+TRBJ2-1"]["jfamily"] == "TRBJ2"
+
+
+def test_build_graph_supplied_vfamily_needs_no_attribute_columns(tcrs):
+    own = tcrs.assign(vfamily=["MINE-1", "MINE-1", "MINE-2", "MINE-3"])
+    G = hg.build_seq_ham1_graph(own, seq_column="junc")
+    assert G.nodes["CATT+TRBV6-2+TRBJ1-1"]["vfamily"] == "MINE-2"
+
+
+def test_build_graph_listing_an_absent_family_column_still_parses(tcrs):
+    """Naming vfamily when the frame has none keeps the parsed value rather than raising."""
+    G = hg.build_seq_ham1_graph(tcrs, seq_column="junc", attribute_columns=["vfamily"])
+    assert G.nodes["CASS+TRBV5-1+TRBJ2-1"]["vfamily"] == "TRBV5"

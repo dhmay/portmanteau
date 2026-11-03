@@ -1,8 +1,9 @@
 # This file contains functions to build and visualize a networkx graph of
 # Hamming-1 connections between TCRs
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import networkx as nx  # type: ignore
+import numpy as np
 import pandas as pd
 import seaborn as sns  # type: ignore
 from matplotlib import pyplot as plt
@@ -26,6 +27,16 @@ def build_and_plot_seq_ham1_graph(
     seq_column: str = "cdr3",
     attribute_columns: Optional[List[str]] = None,
     title: str = "Hamming-1 connection graph",
+    legend_title: Optional[str] = None,
+    node_color_map: Optional[Dict[Any, Any]] = None,
+    max_color_values: Optional[int] = None,
+    other_color: Any = "0.72",
+    other_label: str = "other",
+    node_size_attribute: Optional[str] = None,
+    node_size_range: Tuple[float, float] = (12.0, 200.0),
+    node_size_scale: str = "sqrt",
+    pos: Optional[Dict[Any, Any]] = None,
+    layout_seed: Optional[int] = None,
 ) -> Tuple[NxGraph, plt.Figure, plt.Axes]:
     """Builds and plots a networkx graph of hamming-1 connections between tcrs.
 
@@ -41,12 +52,22 @@ def build_and_plot_seq_ham1_graph(
         legend_bbox_to_anchor (Tuple[float, float], optional): legend location. Defaults to (1.03, 1.0).
         legend_loc (str, optional): legend anchor. Defaults to 'upper left'.
         seq_column (str, optional): sequence column. Defaults to "cdr3".
-        attribute_columns (List[str], optional): columns to use as node attributes. Defaults to None.
+        attribute_columns (List[str], optional): columns to use as node attributes. Defaults to
+            None, which carries exactly the attributes the plot needs - whichever of
+            node_color_attribute and node_size_attribute were given. Pass a list to put more on
+            the returned graph for your own later use.
         title (str, optional): title. Defaults to "Hamming-1 connection graph".
+        legend_title (str, optional): heading for the legend. Defaults to None.
 
     Returns:
         Tuple[NxGraph, plt.Figure, plt.Axes]: Graph, Figure and Axes
     """
+    if attribute_columns is None:
+        # Nothing to carry but what the plot consumes, so the caller does not have to name the
+        # same attribute twice. ⚠️ Forgetting it used to be silent: every node took None, so the
+        # whole graph came out one colour with a blank legend entry.
+        inferred = [a for a in (node_color_attribute, node_size_attribute) if a is not None]
+        attribute_columns = inferred or None
     G = build_seq_ham1_graph(
         pdf_tcrs, seq_column=seq_column, attribute_columns=attribute_columns
     )
@@ -62,8 +83,63 @@ def build_and_plot_seq_ham1_graph(
         legend_bbox_to_anchor=legend_bbox_to_anchor,
         legend_loc=legend_loc,
         title=title,
+        legend_title=legend_title,
+        node_color_map=node_color_map,
+        max_color_values=max_color_values,
+        other_color=other_color,
+        other_label=other_label,
+        node_size_attribute=node_size_attribute,
+        node_size_range=node_size_range,
+        node_size_scale=node_size_scale,
+        pos=pos,
+        layout_seed=layout_seed,
     )
     return G, f, ax
+
+
+def _color_scheme(values, node_color_map, max_color_values, other_color, other_label):
+    """The ordered values that get their own color, and the colors for them.
+
+    An explicit map wins; otherwise the most common values are kept when max_color_values is set,
+    and everything else falls through to other_color at draw time.
+    """
+    if node_color_map is not None:
+        ordered = [v for v in node_color_map if v in set(values)]
+        colors = [node_color_map[v] for v in ordered]
+    elif max_color_values is not None:
+        counts = pd.Series(values).value_counts()
+        ordered = list(counts.head(max_color_values).index)
+        colors = list(sns.color_palette(n_colors=len(ordered)))
+    else:
+        # Historical behaviour: every distinct value gets a color.
+        ordered = sorted(set(values))
+        return ordered, list(sns.color_palette(n_colors=len(ordered)))
+    if set(values) - set(ordered):
+        ordered = ordered + [other_label]
+        colors = colors + [other_color]
+    return ordered, colors
+
+
+def _node_sizes(G, attribute, size_range, scale):
+    """Per-node point areas from a node attribute, in G's own node order."""
+    missing = [n for n in G if G.nodes[n].get(attribute) is None]
+    if missing:
+        raise ValueError(
+            f"{len(missing):,} of {G.number_of_nodes():,} nodes have no {attribute!r} attribute; "
+            "pass it in build_seq_ham1_graph's attribute_columns"
+        )
+    values = np.asarray([G.nodes[n][attribute] for n in G], dtype=float)
+    if scale not in ("linear", "sqrt", "log"):
+        raise ValueError(f"node_size_scale must be 'linear', 'sqrt' or 'log'; got {scale!r}")
+    if scale in ("sqrt", "log") and (values < 0).any():
+        raise ValueError(f"{scale!r} scaling needs non-negative values; got a negative one")
+    transformed = {"linear": values, "sqrt": np.sqrt(values), "log": np.log1p(values)}[scale]
+    smallest, largest = size_range
+    span = float(np.ptp(transformed))
+    if span == 0:
+        # Nothing to compare, so don't imply a comparison: every node gets the middle size.
+        return np.full(len(values), (smallest + largest) / 2)
+    return smallest + (largest - smallest) * (transformed - transformed.min()) / span
 
 
 def build_seq_ham1_graph_and_extract_ccs(
@@ -108,9 +184,10 @@ def build_seq_ham1_graph(
         pdf_tcrs (DataFrame): DataFrame of TCRs
         seq_column (str, optional): sequence column. Defaults to "cdr3".
         attribute_columns (List[str], optional): columns to use as node attributes. Defaults to None.
-            Regardless of what's specified here, vfamily and jfamily will always be added as node
-            attributes, derived from the sequence column. That's because they're so often useful,
-            but it's probably a bad idea.
+            Regardless of what's specified here, vfamily and jfamily are added as node attributes,
+            taken from pdf_tcrs where it has a column of that name and otherwise derived from the
+            sequence column. ⚠️ The derivation reads a "seq+vgene+jgene" sequence and gives
+            "unknown" for any other shape, which is why a column the caller supplies wins.
 
     Returns:
         NxGraph: Networkx graph of hamming-1 connections between sequences
@@ -127,20 +204,26 @@ def build_seq_ham1_graph(
 
     G = nx.Graph()
 
+    # vfamily and jfamily are parsed out of the sequence, but only for the one the caller has not
+    # supplied. ⚠️ The parse reads a "seq+vgene+jgene" sequence and yields "unknown" for anything
+    # else, so overriding a real column with it replaced data with a guess.
+    parsed = [c for c in ("vfamily", "jfamily") if c not in pdf_tcrs.columns]
+    supplied = [c for c in ("vfamily", "jfamily") if c in pdf_tcrs.columns]
+
     for seq in all_seqs:
         chunks = seq.split("+")
         if len(chunks) == 3:
             _, vgene, jgene = chunks
         else:
             vgene = jgene = "unknown"
-        vfamily = vgene.split("-")[0]
-        jfamily = jgene.split("-")[0]
-        G.add_node(seq, vfamily=vfamily, jfamily=jfamily)
+        families = {"vfamily": vgene.split("-")[0], "jfamily": jgene.split("-")[0]}
+        G.add_node(seq, **{c: families[c] for c in parsed})
 
     # if there are other attributes to add, we have to get a little clever, because we haven't explicitly
     # verified that sequence is unique. We'll just take the first value for each sequence
-    if attribute_columns is not None:
-        attrs = [a for a in attribute_columns if a not in ("vfamily", "jfamily")]
+    attrs = [a for a in (attribute_columns or []) if a not in parsed]
+    attrs += [c for c in supplied if c not in attrs]
+    if attrs:
         pdf_first = pdf_tcrs.drop_duplicates(seq_column).set_index(seq_column)[attrs]
         nx.set_node_attributes(G, pdf_first.to_dict(orient="index"))
 
@@ -163,6 +246,15 @@ def plot_seq_ham1_graph(
     legend_loc: str = "upper left",
     title: str = "Hamming-1 connection graph",
     legend_title: Optional[str] = None,
+    node_color_map: Optional[Dict[Any, Any]] = None,
+    max_color_values: Optional[int] = None,
+    other_color: Any = "0.72",
+    other_label: str = "other",
+    node_size_attribute: Optional[str] = None,
+    node_size_range: Tuple[float, float] = (12.0, 200.0),
+    node_size_scale: str = "sqrt",
+    pos: Optional[Dict[Any, Any]] = None,
+    layout_seed: Optional[int] = None,
 ) -> Tuple[plt.Figure, plt.Axes]:
     """Plots a networkx graph of hamming-1 connections between sequences.
 
@@ -178,23 +270,60 @@ def plot_seq_ham1_graph(
         legend_bbox_to_anchor (Tuple[float, float], optional): legend location. Defaults to (1.03, 1.0).
         legend_loc (str, optional): legend anchor. Defaults to 'upper left'.
         title (str, optional): title. Defaults to "Hamming-1 connection graph".
+        node_color_attribute raises if no node carries it at all. Nodes that individually lack a
+            value are drawn in other_color rather than rejected, since a missing value can be
+            real data.
+        node_color_map (dict, optional): explicit value -> color. Any attribute value not in it is
+            drawn in other_color and collected under other_label in the legend. Defaults to None,
+            which colors every distinct value from the seaborn palette.
+        max_color_values (int, optional): color only the this-many most common attribute values and
+            send the rest to other_color. ⚠️ Without it a palette of N colors is stretched over
+            however many values there are, and seaborn recycles colors past the end of the palette,
+            so two values can get the same swatch with nothing saying so. Defaults to None.
+        other_color: color for unmapped values. Defaults to "0.72".
+        other_label (str, optional): legend label for them. Defaults to "other".
+        node_size_attribute (str, optional): node attribute to size nodes by, in place of the
+            node_size scalar. ⚠️ Sizing is keyed on the attribute rather than taking a sequence,
+            because a sequence would have to match G's node order and build_seq_ham1_graph builds
+            its nodes from a set, whose order a caller cannot predict. Defaults to None.
+        node_size_range (tuple, optional): (smallest, largest) point area to map values onto.
+            Defaults to (12.0, 200.0).
+        node_size_scale (str, optional): "linear", "sqrt" or "log", applied to the values before
+            they are mapped onto node_size_range. Defaults to "sqrt".
+        pos (dict, optional): a precomputed layout, so a caller can draw twice against one layout
+            or annotate afterwards. Defaults to None, which computes a spring layout.
+        layout_seed (int, optional): seed for that spring layout. Defaults to None, which is
+            nondeterministic - the historical behaviour.
     """
     node_colors = "b"
     if node_color_attribute is not None:
         # Define the node colors based on the attribute, in G's node order (which is what
         # draw_networkx_nodes uses)
         node_color_vals = [G.nodes[n].get(node_color_attribute) for n in G]
-        ordered_unique_color_vals = sorted(list(set(node_color_vals)))
-        colors_inorder = sns.color_palette(n_colors=len(ordered_unique_color_vals))
+        if all(v is None for v in node_color_vals):
+            raise ValueError(
+                f"no node carries a {node_color_attribute!r} attribute, so every node would be "
+                "drawn in one colour; pass it in build_seq_ham1_graph's attribute_columns"
+            )
+        ordered_unique_color_vals, colors_inorder = _color_scheme(
+            node_color_vals, node_color_map, max_color_values, other_color, other_label
+        )
         val_color_map = dict(zip(*[ordered_unique_color_vals, colors_inorder]))
-        node_colors = [val_color_map[x] for x in node_color_vals]  # type: ignore
+        node_colors = [  # type: ignore
+            val_color_map.get(x, other_color) for x in node_color_vals
+        ]
+
+    node_sizes: Any = node_size
+    if node_size_attribute is not None:
+        node_sizes = _node_sizes(G, node_size_attribute, node_size_range, node_size_scale)
 
     # Initialize the plot
     f, ax = plt.subplots(figsize=(width, height))
 
     # Draw the graph
-    pos = nx.spring_layout(G)
-    nx.draw_networkx_nodes(G, pos, node_color=node_colors, node_size=node_size, ax=ax)
+    if pos is None:
+        pos = nx.spring_layout(G, seed=layout_seed)
+    nx.draw_networkx_nodes(G, pos, node_color=node_colors, node_size=node_sizes, ax=ax)
     nx.draw_networkx_edges(G, pos, alpha=edge_alpha, width=edge_width, ax=ax)
     ax.set_title(title)
 
