@@ -668,6 +668,7 @@ def _add_title_slide(prs, layouts, title: str | None, author: str | None,
     heading = slide_obj.shapes.title
     if heading is not None and title:
         heading.text_frame.paragraphs[0].add_run().text = title
+        _centre_on_slide(prs, heading)
 
     # compared by index, not identity: python-pptx hands out a fresh wrapper object on every
     # access, so `shape is not heading` is true even for the placeholder that *is* the heading
@@ -685,14 +686,37 @@ def _add_title_slide(prs, layouts, title: str | None, author: str | None,
 
 def _add_section_slide(prs, layouts, title: str, style: DeckStyle) -> None:
     slide_obj = prs.slides.add_slide(layouts[style.section_layout])
-    if slide_obj.shapes.title is not None:
-        slide_obj.shapes.title.text_frame.paragraphs[0].add_run().text = title
+    heading = slide_obj.shapes.title
+    if heading is not None:
+        heading.text_frame.paragraphs[0].add_run().text = title
+        _centre_on_slide(prs, heading)
         return
     placeholder = slide_obj.placeholders[style.body_idx]
     frame = placeholder.text_frame
     frame.clear()
     frame.paragraphs[0].add_run().text = title
     _suppress_bullet(frame.paragraphs[0])
+    _centre_on_slide(prs, placeholder)
+
+
+def _centre_on_slide(prs, shape) -> None:
+    """Centre a one-line placeholder on the slide, and centre its text within the box.
+
+    The opening and section slides carry a single short heading, and the house template anchors
+    it top-left - where it reads as the first line of a content slide whose content never
+    arrives. Both the box and the text are moved: centring the box alone leaves the text ragged
+    inside it as soon as the heading wraps to two lines.
+
+    Placed after the callers rather than before, since it is machinery they reach for and not
+    something a reader of this module needs first.
+    """
+    from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
+
+    shape.left = int((prs.slide_width - shape.width) / 2)
+    shape.top = int((prs.slide_height - shape.height) / 2)
+    shape.text_frame.vertical_anchor = MSO_ANCHOR.MIDDLE
+    for paragraph in shape.text_frame.paragraphs:
+        paragraph.alignment = PP_ALIGN.CENTER
 
 
 def _check_overflow(prs, labels, style: DeckStyle) -> None:
