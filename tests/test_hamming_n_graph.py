@@ -102,3 +102,27 @@ def test_ham1_cover_is_the_distance_1_graph(ladder):
 
 def test_plotter_is_reachable_under_both_names(ladder):
     assert hg1.plot_seq_ham1_graph is hgn.plot_seq_graph
+
+
+def test_edges_follow_index_labels_not_positions():
+    """⚠️ Regression: row_i/row_j are index labels. Treating them as positions is invisible on a
+    RangeIndex and wires edges to the wrong nodes on any other index."""
+    shuffled = pd.DataFrame(
+        {"cdr3": ["QQQQ", "CASS", "CATS"]},         # positions 0,1,2
+        index=[2, 0, 1],                            # labels deliberately a permutation
+    )
+    G = hgn.build_seq_hamming_graph(shuffled, seq_column="cdr3")
+    assert {tuple(sorted(e)) for e in G.edges} == {("CASS", "CATS")}
+
+
+def test_non_range_index_is_handled(ladder):
+    """A frame carved out of a bigger one keeps that frame's labels."""
+    carved = ladder.iloc[1:].copy()                 # index 1,2,3
+    G = hgn.build_seq_hamming_graph(carved, seq_column="cdr3")
+    assert {tuple(sorted(e)) for e in G.edges} == {("CATS", "CATT")}
+
+
+def test_duplicate_index_raises(ladder):
+    doubled = pd.concat([ladder, ladder])           # labels repeat
+    with pytest.raises(ValueError, match="non-unique index"):
+        hgn.build_seq_hamming_graph(doubled, seq_column="cdr3")

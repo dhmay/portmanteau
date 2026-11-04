@@ -270,11 +270,15 @@ def build_seq_hamming_graph(
     # sequence under two V genes would be a single node wearing both sets of edges.
     key_columns = [seq_column] + list(resolved_group_cols or [])
     pdf_keys = pdf_tcrs[key_columns].drop_duplicates()
+    if not pdf_tcrs.index.is_unique:
+        raise ValueError(
+            "pdf_tcrs has a non-unique index, and pair rows name their endpoints by index label"
+        )
     node_of_row = {
-        i: (row[0] if len(key_columns) == 1 else tuple(row))
-        for i, row in zip(pdf_tcrs.index, pdf_tcrs[key_columns].itertuples(index=False, name=None))
+        label: (row[0] if len(key_columns) == 1 else tuple(row))
+        for label, row in zip(pdf_tcrs.index,
+                              pdf_tcrs[key_columns].itertuples(index=False, name=None))
     }
-    position_of_row = {position: i for position, i in enumerate(pdf_tcrs.index)}
 
     G = nx.Graph(group_cols=list(resolved_group_cols) if resolved_group_cols else None)
 
@@ -313,8 +317,10 @@ def build_seq_hamming_graph(
     # different rescaling can compute it without rebuilding.
     distances = (pdf_pairs.hamming_distance if "hamming_distance" in pdf_pairs.columns
                  else [distance] * len(pdf_pairs))
+    # ⚠️ row_i and row_j are index LABELS, not positions. Treating them as positions is a no-op
+    # on a RangeIndex and silently wires edges to the wrong nodes on any other index.
     for row_i, row_j, edge_distance in zip(pdf_pairs.row_i, pdf_pairs.row_j, distances):
-        G.add_edge(node_of_row[position_of_row[row_i]], node_of_row[position_of_row[row_j]],
+        G.add_edge(node_of_row[row_i], node_of_row[row_j],
                    weight=weigh(int(edge_distance)), hamming_distance=int(edge_distance))
 
     return G
