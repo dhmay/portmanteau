@@ -1,6 +1,6 @@
 # This file contains functions to build and visualize a networkx graph of
 # Hamming-1 connections between TCRs
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import networkx as nx  # type: ignore
 import numpy as np
@@ -28,6 +28,10 @@ def build_and_plot_seq_ham1_graph(
     attribute_columns: Optional[List[str]] = None,
     title: str = "Hamming-1 connection graph",
     legend_title: Optional[str] = None,
+    same_vj: bool = False,
+    group_cols: Optional[Sequence[str]] = None,
+    same_v: bool = False,
+    same_j: bool = False,
     node_color_map: Optional[Dict[Any, Any]] = None,
     max_color_values: Optional[int] = None,
     other_color: Any = "0.72",
@@ -69,7 +73,8 @@ def build_and_plot_seq_ham1_graph(
         inferred = [a for a in (node_color_attribute, node_size_attribute) if a is not None]
         attribute_columns = inferred or None
     G = build_seq_ham1_graph(
-        pdf_tcrs, seq_column=seq_column, attribute_columns=attribute_columns
+        pdf_tcrs, seq_column=seq_column, attribute_columns=attribute_columns,
+        same_vj=same_vj, group_cols=group_cols, same_v=same_v, same_j=same_j,
     )
     f, ax = plot_seq_ham1_graph(
         G,
@@ -147,6 +152,9 @@ def build_seq_ham1_graph_and_extract_ccs(
     min_seqs: int = 1,
     seq_column: str = "cdr3",
     same_vj: bool = False,
+    group_cols: Optional[Sequence[str]] = None,
+    same_v: bool = False,
+    same_j: bool = False,
 ) -> pd.DataFrame:
     """Builds a networkx graph of hamming-1 connections between sequences and extracts connected
     components with at least `min_seqs` sequences.
@@ -163,12 +171,21 @@ def build_seq_ham1_graph_and_extract_ccs(
     Returns:
         pd.DataFrame: pdf_tcrs with connected_component column
     """
-    if len(set(pdf_tcrs[seq_column])) != len(pdf_tcrs):
-        raise ValueError(f"pdf_tcrs has duplicate sequences in column '{seq_column}'")
-    else:
-        G = build_seq_ham1_graph(pdf_tcrs, seq_column=seq_column, same_vj=same_vj)
+    resolved_group_cols = _resolve_group_cols(group_cols, same_vj, same_v, same_j)
+    # ⚠️ Uniqueness is per group, not per sequence: under grouping one sequence may legitimately
+    # appear once under each group, and those are different nodes.
+    key_columns = [seq_column] + list(resolved_group_cols or [])
+    if pdf_tcrs.duplicated(key_columns).any():
+        raise ValueError(
+            f"pdf_tcrs has duplicate rows over {key_columns}, so a component cannot be merged "
+            "back onto one row"
+        )
+    G = build_seq_ham1_graph(
+        pdf_tcrs, seq_column=seq_column, same_vj=same_vj, group_cols=group_cols,
+        same_v=same_v, same_j=same_j,
+    )
     pdf_ccs = extract_connected_components(G, min_seqs, seq_column=seq_column)
-    pdf_tcrs_with_ccs = pdf_tcrs.merge(pdf_ccs, on=seq_column)
+    pdf_tcrs_with_ccs = pdf_tcrs.merge(pdf_ccs, on=key_columns)
     return pdf_tcrs_with_ccs
 
 def build_seq_ham1_graph(
@@ -176,6 +193,9 @@ def build_seq_ham1_graph(
     seq_column: str = "cdr3",
     attribute_columns: Optional[List[str]] = None,
     same_vj: bool = False,
+    group_cols: Optional[Sequence[str]] = None,
+    same_v: bool = False,
+    same_j: bool = False,
 ) -> NxGraph:
     """Builds a networkx graph from a DataFrame of TCRs, where nodes are seqs and edges are
     hamming-1 connections between sequences.
@@ -188,21 +208,40 @@ def build_seq_ham1_graph(
             taken from pdf_tcrs where it has a column of that name and otherwise derived from the
             sequence column. ⚠️ The derivation reads a "seq+vgene+jgene" sequence and gives
             "unknown" for any other shape, which is why a column the caller supplies wins.
+        same_vj (bool, optional): only join sequences sharing a vgene and a jgene. Sugar for
+            group_cols=["vgene", "jgene"]. Defaults to False.
+        group_cols (Sequence[str], optional): only join sequences agreeing on these columns. Any
+            columns, so "same V family" or "same donor" are as expressible as "same V gene".
+            ⚠️ **Grouping changes what a node is**: a bare sequence would collect edges from
+            every group it appears in, defeating the condition, so with group_cols a node is the
+            tuple (sequence, *group values). Without it, nodes are bare sequences as before.
+            Also the lever for size - pair counts grow quadratically, and grouping cuts the
+            comparisons. Defaults to None.
+        same_v (bool, optional): sugar for group_cols=["vgene"]. Defaults to False.
+        same_j (bool, optional): sugar for group_cols=["jgene"]. Defaults to False.
+            ⚠️ The three same_* flags assume columns literally named "vgene" and "jgene"; a frame
+            that calls them something else wants group_cols. Passing group_cols together with any
+            same_* flag is an error rather than a silent precedence rule, as is same_vj with
+            same_v or same_j.
 
     Returns:
-        NxGraph: Networkx graph of hamming-1 connections between sequences
+        NxGraph: Networkx graph of hamming-1 connections between sequences. `G.graph["group_cols"]`
+            records the grouping, so a consumer can tell what a node is without being told.
     """
-    seq_column_i = seq_column + "_i"
-    seq_column_j = seq_column + "_j"
+    resolved_group_cols = _resolve_group_cols(group_cols, same_vj, same_v, same_j)
+    pdf_ham1pairs = find_hamming1_pairs(pdf_tcrs, seq_column, group_cols=resolved_group_cols)
 
-    if same_vj:
-        pdf_ham1pairs = find_hamming1_pairs(pdf_tcrs, seq_column, group_cols=["vgene", "jgene"])
-    else:
-        pdf_ham1pairs = find_hamming1_pairs(pdf_tcrs, seq_column)
+    # The node key carries the grouping, or the condition would be undone at the node: one
+    # sequence under two V genes would be a single node wearing both sets of edges.
+    key_columns = [seq_column] + list(resolved_group_cols or [])
+    pdf_keys = pdf_tcrs[key_columns].drop_duplicates()
+    node_of_row = {
+        i: (row[0] if len(key_columns) == 1 else tuple(row))
+        for i, row in zip(pdf_tcrs.index, pdf_tcrs[key_columns].itertuples(index=False, name=None))
+    }
+    position_of_row = {position: i for position, i in enumerate(pdf_tcrs.index)}
 
-    all_seqs = set(pdf_tcrs[seq_column])
-
-    G = nx.Graph()
+    G = nx.Graph(group_cols=list(resolved_group_cols) if resolved_group_cols else None)
 
     # vfamily and jfamily are parsed out of the sequence, but only for the one the caller has not
     # supplied. ⚠️ The parse reads a "seq+vgene+jgene" sequence and yields "unknown" for anything
@@ -210,27 +249,55 @@ def build_seq_ham1_graph(
     parsed = [c for c in ("vfamily", "jfamily") if c not in pdf_tcrs.columns]
     supplied = [c for c in ("vfamily", "jfamily") if c in pdf_tcrs.columns]
 
-    for seq in all_seqs:
+    for key_row in pdf_keys.itertuples(index=False, name=None):
+        seq = key_row[0]
         chunks = seq.split("+")
         if len(chunks) == 3:
             _, vgene, jgene = chunks
         else:
             vgene = jgene = "unknown"
         families = {"vfamily": vgene.split("-")[0], "jfamily": jgene.split("-")[0]}
-        G.add_node(seq, **{c: families[c] for c in parsed})
+        node = key_row[0] if len(key_columns) == 1 else key_row
+        G.add_node(node, **{c: families[c] for c in parsed})
 
     # if there are other attributes to add, we have to get a little clever, because we haven't explicitly
     # verified that sequence is unique. We'll just take the first value for each sequence
     attrs = [a for a in (attribute_columns or []) if a not in parsed]
     attrs += [c for c in supplied if c not in attrs]
     if attrs:
-        pdf_first = pdf_tcrs.drop_duplicates(seq_column).set_index(seq_column)[attrs]
-        nx.set_node_attributes(G, pdf_first.to_dict(orient="index"))
+        pdf_first = pdf_tcrs.drop_duplicates(key_columns)
+        keys = [row[0] if len(key_columns) == 1 else tuple(row)
+                for row in pdf_first[key_columns].itertuples(index=False, name=None)]
+        nx.set_node_attributes(
+            G, dict(zip(keys, pdf_first[attrs].to_dict(orient="records")))
+        )
 
-    for _, row in pdf_ham1pairs.iterrows():
-        G.add_edge(row[seq_column_i], row[seq_column_j], weight=1)
+    # Endpoints come from the pair rows' positions rather than their sequence values: under
+    # grouping a sequence alone no longer names a node.
+    for row_i, row_j in zip(pdf_ham1pairs.row_i, pdf_ham1pairs.row_j):
+        G.add_edge(node_of_row[position_of_row[row_i]], node_of_row[position_of_row[row_j]],
+                   weight=1)
 
     return G
+
+
+def _resolve_group_cols(group_cols, same_vj, same_v, same_j) -> Optional[List[str]]:
+    """One grouping from the general parameter and the three sugar flags, or a loud conflict."""
+    sugar = [name for name, on in (("same_v", same_v), ("same_j", same_j)) if on]
+    if same_vj and sugar:
+        raise ValueError(
+            f"same_vj already means same_v and same_j; passing it with {' and '.join(sugar)} "
+            "says the same thing twice and could say two different things. Pass one or the other."
+        )
+    if group_cols is not None and (same_vj or sugar):
+        named = ", ".join(["same_vj"] if same_vj else sugar)
+        raise ValueError(f"pass group_cols or {named}, not both")
+    if group_cols is not None:
+        return list(group_cols)
+    if same_vj:
+        return ["vgene", "jgene"]
+    resolved = (["vgene"] if same_v else []) + (["jgene"] if same_j else [])
+    return resolved or None
 
 
 def plot_seq_ham1_graph(
@@ -358,17 +425,23 @@ def extract_connected_components(
     Returns:
         pd.DataFrame: Pandas dataframe with columns seq_column and `connected_component`
     """
+    # A grouped graph's nodes are (sequence, *group values); the frame gets a column each, so it
+    # still merges back onto the rows it came from. G records the grouping it was built with.
+    group_cols = list(G.graph.get("group_cols") or [])
+    columns = [seq_column] + group_cols
+
     pdfs = []
     nodes_in_ccs = set()
     for idx, seqs in enumerate(nx.connected_components(G)):
         if len(seqs) >= min_seqs:
-            pdf_one_cc = pd.DataFrame({seq_column: list(seqs)})
+            rows = [node if group_cols else (node,) for node in seqs]
+            pdf_one_cc = pd.DataFrame(rows, columns=columns)
             pdf_one_cc["connected_component"] = idx
             pdfs.append(pdf_one_cc)
             nodes_in_ccs.update(seqs)
 
     if len(pdfs) == 0:
-        return pd.DataFrame(columns=[seq_column, "connected_component"])
+        return pd.DataFrame(columns=columns + ["connected_component"])
     else:
         pdf_ccs = pd.concat(pdfs)
     return pdf_ccs
