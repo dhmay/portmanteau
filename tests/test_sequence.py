@@ -28,8 +28,13 @@ def test_build_graph_with_attributes(tcrs):
 
 
 def test_build_graph_same_vj(tcrs):
+    """⚠️ Grouping makes a node (sequence, *group values), same_vj included."""
     G = hg.build_seq_ham1_graph(tcrs, seq_column="junc", same_vj=True)
-    assert {tuple(sorted(e)) for e in G.edges} == {("CASS+TRBV5-1+TRBJ2-1", "CATS+TRBV5-1+TRBJ2-1")}
+    assert G.graph["group_cols"] == ["vgene", "jgene"]
+    assert {tuple(sorted(e)) for e in G.edges} == {
+        (("CASS+TRBV5-1+TRBJ2-1", "TRBV5-1", "TRBJ2-1"),
+         ("CATS+TRBV5-1+TRBJ2-1", "TRBV5-1", "TRBJ2-1"))
+    }
 
 
 def test_extract_ccs(tcrs):
@@ -201,3 +206,88 @@ def test_build_graph_listing_an_absent_family_column_still_parses(tcrs):
     """Naming vfamily when the frame has none keeps the parsed value rather than raising."""
     G = hg.build_seq_ham1_graph(tcrs, seq_column="junc", attribute_columns=["vfamily"])
     assert G.nodes["CASS+TRBV5-1+TRBJ2-1"]["vfamily"] == "TRBV5"
+
+
+@pytest.fixture
+def shared_cdr3():
+    """One CDR3 under two V genes, plus a 1-away neighbour of each. Ungrouped they are one node."""
+    return pd.DataFrame(
+        {
+            "cdr3": ["CASS", "CASS", "CATS", "CAST"],
+            "vgene": ["TRBV5-1", "TRBV6-2", "TRBV5-1", "TRBV6-2"],
+            "jgene": ["TRBJ2-1", "TRBJ1-1", "TRBJ2-1", "TRBJ2-1"],
+        }
+    )
+
+
+def test_group_cols_splits_a_sequence_that_spans_groups(shared_cdr3):
+    ungrouped = hg.build_seq_ham1_graph(shared_cdr3, seq_column="cdr3")
+    assert ungrouped.number_of_nodes() == 3          # CASS is one node wearing both V genes
+    assert ungrouped.graph["group_cols"] is None
+
+    grouped = hg.build_seq_ham1_graph(shared_cdr3, seq_column="cdr3", group_cols=["vgene"])
+    assert grouped.number_of_nodes() == 4            # CASS is two nodes, one per V gene
+    assert {tuple(sorted(e)) for e in grouped.edges} == {
+        (("CASS", "TRBV5-1"), ("CATS", "TRBV5-1")),
+        (("CASS", "TRBV6-2"), ("CAST", "TRBV6-2")),
+    }
+
+
+def test_same_v_and_same_j_are_sugar(shared_cdr3):
+    by_v = hg.build_seq_ham1_graph(shared_cdr3, seq_column="cdr3", same_v=True)
+    assert by_v.graph["group_cols"] == ["vgene"]
+    by_j = hg.build_seq_ham1_graph(shared_cdr3, seq_column="cdr3", same_j=True)
+    assert by_j.graph["group_cols"] == ["jgene"]
+    both = hg.build_seq_ham1_graph(shared_cdr3, seq_column="cdr3", same_v=True, same_j=True)
+    assert both.graph["group_cols"] == ["vgene", "jgene"]
+    # same_v + same_j and same_vj are two spellings of one grouping
+    vj = hg.build_seq_ham1_graph(shared_cdr3, seq_column="cdr3", same_vj=True)
+    assert set(both.edges) == set(vj.edges)
+
+
+def test_grouping_on_a_column_that_is_not_a_gene(shared_cdr3):
+    """Any column: the point of group_cols over the gene-shaped flags."""
+    donors = shared_cdr3.assign(donor=["d1", "d1", "d2", "d1"])
+    G = hg.build_seq_ham1_graph(donors, seq_column="cdr3", group_cols=["donor"])
+    assert G.graph["group_cols"] == ["donor"]
+    # CASS/CATS are 1 apart but sit in different donors, so no edge survives
+    assert G.number_of_edges() == 1
+    assert {tuple(sorted(e)) for e in G.edges} == {(("CASS", "d1"), ("CAST", "d1"))}
+
+
+@pytest.mark.parametrize(
+    "kwargs, match",
+    [
+        ({"same_vj": True, "same_v": True}, "same_vj already means"),
+        ({"same_vj": True, "same_j": True}, "same_vj already means"),
+        ({"same_vj": True, "same_v": True, "same_j": True}, "same_v and same_j"),
+        ({"group_cols": ["vgene"], "same_vj": True}, "group_cols or same_vj"),
+        ({"group_cols": ["vgene"], "same_v": True}, "group_cols or same_v"),
+    ],
+)
+def test_conflicting_grouping_arguments_raise(shared_cdr3, kwargs, match):
+    with pytest.raises(ValueError, match=match):
+        hg.build_seq_ham1_graph(shared_cdr3, seq_column="cdr3", **kwargs)
+
+
+def test_extract_ccs_round_trips_under_grouping(shared_cdr3):
+    pdf = hg.build_seq_ham1_graph_and_extract_ccs(
+        shared_cdr3, seq_column="cdr3", group_cols=["vgene"]
+    )
+    assert len(pdf) == len(shared_cdr3)        # every input row keeps its own component
+    assert sorted(pdf.groupby("connected_component").size()) == [2, 2]
+    # the same CDR3 under two V genes lands in two different components
+    assert pdf[pdf.cdr3.eq("CASS")].connected_component.nunique() == 2
+
+
+def test_extract_ccs_duplicate_check_is_per_group(shared_cdr3):
+    """CASS twice is fine when grouping by vgene, and not fine when ungrouped."""
+    hg.build_seq_ham1_graph_and_extract_ccs(shared_cdr3, seq_column="cdr3", group_cols=["vgene"])
+    with pytest.raises(ValueError, match="duplicate rows"):
+        hg.build_seq_ham1_graph_and_extract_ccs(shared_cdr3, seq_column="cdr3")
+
+
+def test_plot_wrapper_forwards_grouping(shared_cdr3):
+    G, _, _ = hg.build_and_plot_seq_ham1_graph(shared_cdr3, seq_column="cdr3", same_v=True)
+    assert G.graph["group_cols"] == ["vgene"]
+    assert G.number_of_nodes() == 4
