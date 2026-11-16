@@ -1,8 +1,8 @@
 # portmanteau
 
-Small, portable Python utilities for data analysis: cached downloads, ROC metrics and
-plots, Hamming-distance sequence pairs and graphs, styling for plots, and slide decks built from
-notebooks.
+Small, portable Python utilities for data analysis: cached downloads, pinned dataset
+releases, ROC metrics and plots, Hamming-distance sequence pairs and graphs, styling for plots,
+and slide decks built from notebooks.
 
 ## Install
 
@@ -32,6 +32,7 @@ The only required dependency is pandas. Importing individual modules incurs addi
 | Extra      | Modules                                         | Adds                               |
 |------------|-------------------------------------------------|------------------------------------|
 | `download` | `portmanteau.data.download`                     | pooch                              |
+| `releases` | `portmanteau.data.release_cache`                | pooch, pyarrow                     |
 | `metrics`  | `portmanteau.metrics.roc`                       | scikit-learn                       |
 | `plots`    | `portmanteau.plots.*`                           | matplotlib, seaborn, plotly, scikit-learn |
 | `sequence` | `portmanteau.sequence.*`                        | networkx, matplotlib, seaborn      |
@@ -53,6 +54,31 @@ files = fetch_zip("https://example.org/archive.zip")                    # -> lis
 
 Files go to the OS cache directory (`~/Library/Caches/portmanteau` on macOS), or to
 `$PORTMANTEAU_DATA_DIR` or `dest_dir=` if set.
+
+**Pinned releases.** A `ReleaseCache` turns `<database>/<version>` into a verified local file and
+keeps a provenance sidecar beside it, so an analysis can name a release rather than a URL. You
+supply the registry; the cache supplies the bookkeeping — hash pinning, a content check that
+catches a 404 served as HTML, a no-rehash fast path, and `derived_frame`, which builds a reshaped
+table once and rebuilds it only when a contributing release changes.
+
+```python
+from portmanteau.data.releases import Release
+from portmanteau.data.release_cache import ReleaseCache
+
+RELEASES = {r.name: r for r in [
+    Release(database="vdjdb", version="2026-06-03", url="https://.../vdjdb-2026-06-03.zip",
+            sha256="9ae7...", member="vdjdb-2026-06-03/vdjdb_full.txt",
+            expect_header="antigen.epitope"),
+]}
+cache = ReleaseCache(RELEASES, root_env="MYPROJECT_CACHE")
+
+path = cache.ensure_release("vdjdb/2026-06-03")          # -> Path, downloaded once
+pdf = cache.derived_frame("vdjdb", "trimmed.parquet", build_trimmed)
+print(cache.download_log_entry("vdjdb"))                 # a stanza for your download log
+```
+
+Leave `root` and `root_env` out and downloads land in the OS cache directory. A release with no
+`sha256` is refused until you pass `allow_unpinned=True`, which prints the hash to paste back in.
 
 **ROC metrics and plots:**
 

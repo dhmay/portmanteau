@@ -1,7 +1,7 @@
 [project]
 name = "portmanteau"
-version = "0.8.1"
-description = "Portable Python utilities for data analysis: cached downloads, ROC metrics and plots, Hamming-distance sequence pairs and graphs, notebook-sourced slide decks"
+version = "0.9.0"
+description = "Portable Python utilities for data analysis: cached downloads, pinned dataset releases, ROC metrics and plots, Hamming-distance sequence pairs and graphs, notebook-sourced slide decks"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
@@ -9,6 +9,7 @@ dependencies = ["pandas"]
 
 [project.optional-dependencies]
 download = ["pooch"]
+releases = ["pooch", "pyarrow"]
 metrics = ["scikit-learn"]
 plots = ["matplotlib", "seaborn", "plotly", "scikit-learn"]
 sequence = ["networkx", "matplotlib", "seaborn"]
