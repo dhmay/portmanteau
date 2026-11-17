@@ -3,6 +3,7 @@ import pandas as pd
 import pytest
 
 from portmanteau.tcr.publicdb.common import TRB_KEY_V_FAMILY
+from portmanteau.tcr.publicdb import combined
 from portmanteau.tcr.publicdb.combined import DEXTRAMER_SCREEN_PATTERN, top_antigens
 
 TRB_KEY = TRB_KEY_V_FAMILY
@@ -179,3 +180,29 @@ def test_an_absent_second_antigen_has_an_unknown_screen_flag_not_a_false_one():
     row = top_antigens(pdf, trb_key=TRB_KEY).iloc[0]
     assert pd.isna(row.second_antigen_dextramer_only)
     assert row.top_antigen_dextramer_only is False or row.top_antigen_dextramer_only == False
+
+
+# --- the aggregation helpers themselves ------------------------------------------------------
+#
+# ⚠️ These are reached only when a derived table is actually BUILT. A cached parquet skips them
+# entirely, so a break here stays invisible until someone clears the cache - which is exactly how
+# a missing `import re` survived a full green suite. Test them directly.
+
+
+def test_joined_pmids_extracts_only_pubmed_ids():
+    """IEDB stores its own IRIs; counting those as references double-counts a paper."""
+    values = pd.Series(["PMID:28629751", "PMID:28629751", "http://www.iedb.org/reference/1038466",
+                        None, "PMID:31324695"])
+    assert combined._joined_pmids(values) == "28629751|31324695"
+
+
+def test_joined_pmids_on_references_with_no_pubmed_id_is_empty():
+    assert combined._joined_pmids(pd.Series(["http://www.iedb.org/reference/1", None])) == ""
+
+
+def test_every_aggregation_helper_is_importable_and_callable():
+    """A NameError inside one of these only surfaces on a cache miss. Touch each one."""
+    series = pd.Series(["a", "b", None, "a"])
+    for name in ("_joined", "_joined_pmids"):
+        helper = getattr(combined, name)
+        assert isinstance(helper(series), str), name

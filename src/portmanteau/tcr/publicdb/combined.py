@@ -29,6 +29,8 @@ Two things here cost real time to learn and are kept separate on purpose:
 """
 from __future__ import annotations
 
+import re
+
 import pandas as pd
 
 from portmanteau.tcr.publicdb import iedb, mcpas, vdjdb
