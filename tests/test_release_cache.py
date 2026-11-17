@@ -6,6 +6,8 @@ content checks, the provenance record and the derived-table cache.
 """
 import hashlib
 import json
+import shutil
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -370,3 +372,142 @@ def test_a_registry_given_as_a_sequence_is_keyed_by_name(tmp_path):
                          root=tmp_path)
     assert cache.get_release("d/1").url.endswith("/a")
     assert cache.databases() == ["d"]
+
+
+def _writer(body):
+    """A stand-in for `fetch` that writes fixed bytes and returns the path."""
+    def _fetch(url, known_hash=None, fname=None, dest_dir=None, progressbar=False):
+        target = Path(dest_dir) / fname
+        target.write_bytes(body)
+        return target
+    return _fetch
+
+# --- rolling releases, update checks and expiry ----------------------------------------------
+#
+# A rolling release is one whose URL serves "the current build" rather than naming a version, so
+# its pinned bytes stop existing the moment upstream rebuilds.
+
+
+def _rolling_registry(tmp_path, body=b"header\nrow\n" + b"x" * 2048, sha="__match__"):
+    """A rolling release whose recorded hash matches `body` unless `sha` says otherwise."""
+    if sha == "__match__":
+        sha = hashlib.sha256(body).hexdigest()
+    release = Release(database="roll", version="v1",
+                      url="https://example.invalid/current.csv",
+                      sha256=sha, expect_header="header", rolling=True)
+    return {release.name: release}, body
+
+
+def test_a_cache_hit_never_touches_the_network_or_rehashes(tmp_path, monkeypatch):
+    """The whole point of the cache: reading from it must not depend on upstream being up."""
+    registry, body = _rolling_registry(tmp_path)
+    cache = ReleaseCache(registry, root=tmp_path)
+    calls = []
+
+    def _fetch(url, known_hash=None, fname=None, dest_dir=None, progressbar=False):
+        calls.append(url)
+        target = Path(dest_dir) / fname
+        target.write_bytes(body)
+        return target
+
+    monkeypatch.setattr(cache_module, "fetch", _fetch)
+    cache.ensure_release("roll/v1")
+    assert len(calls) == 1
+    for _ in range(5):
+        cache.ensure_release("roll/v1")
+    assert len(calls) == 1, "a cache hit went back to the network"
+
+
+def test_a_rolling_release_accepts_a_rebuilt_upstream_on_a_cold_fetch(tmp_path, monkeypatch, capsys):
+    """The recorded hash is a record, not a contract: the pinned bytes no longer exist."""
+    registry, body = _rolling_registry(tmp_path, sha="0" * 64)
+    cache = ReleaseCache(registry, root=tmp_path)
+    monkeypatch.setattr(cache_module, "fetch", _writer(body))
+
+    path = cache.ensure_release("roll/v1")
+    assert path.read_bytes() == body
+    out = capsys.readouterr().out
+    assert "rolling" in out and "rebuilt" in out, "the swap must be announced"
+    record = cache.release_provenance("roll/v1")
+    assert record["registry_sha256"] == "0" * 64
+    assert record["sha256"] != "0" * 64
+
+
+@pytest.mark.parametrize("rolling,expect_known_hash", [(False, True), (True, False)])
+def test_only_a_versioned_release_hands_its_hash_to_the_downloader(
+        tmp_path, monkeypatch, rolling, expect_known_hash):
+    """Rolling is opt-in, and this is the whole of what it changes on a fetch.
+
+    The downloader verifies `known_hash` (pooch's job, covered in test_download.py). Passing it
+    makes a mismatch fatal; withholding it makes the fetch accept whatever upstream now serves.
+    """
+    body = b"header\n" + b"x" * 2048
+    release = Release(database="db", version="v1", url="https://example.invalid/v1.csv",
+                      sha256=hashlib.sha256(body).hexdigest(), expect_header="header",
+                      rolling=rolling)
+    cache = ReleaseCache({release.name: release}, root=tmp_path)
+    seen = {}
+
+    def _fetch(url, known_hash=None, fname=None, dest_dir=None, progressbar=False):
+        seen["known_hash"] = known_hash
+        target = Path(dest_dir) / fname
+        target.write_bytes(body)
+        return target
+
+    monkeypatch.setattr(cache_module, "fetch", _fetch)
+    cache.ensure_release("db/v1")
+    assert (seen["known_hash"] is not None) is expect_known_hash
+
+
+def test_check_for_update_reports_staleness_without_touching_the_cache(tmp_path, monkeypatch):
+    registry, body = _rolling_registry(tmp_path)
+    cache = ReleaseCache(registry, root=tmp_path)
+    monkeypatch.setattr(cache_module, "fetch", _writer(body))
+    cache.ensure_release("roll/v1")
+    before = cache.release_provenance("roll/v1")
+
+    assert cache.check_for_update("roll/v1").status == "current"
+
+    rebuilt = b"header\nrow\n" + b"y" * 4096
+    monkeypatch.setattr(cache_module, "fetch", _writer(rebuilt))
+    result = cache.check_for_update("roll/v1")
+    assert result.stale and result.status == "stale"
+    assert result.upstream_bytes == len(rebuilt)
+    assert result.cached_sha256 != result.upstream_sha256
+    assert cache.release_provenance("roll/v1") == before, "the check mutated the cache"
+    assert cache.cached_path("roll/v1").read_bytes() == body
+
+
+def test_expire_removes_the_release_so_the_next_call_refetches(tmp_path, monkeypatch):
+    registry, body = _rolling_registry(tmp_path)
+    cache = ReleaseCache(registry, root=tmp_path)
+    monkeypatch.setattr(cache_module, "fetch", _writer(body))
+    cache.ensure_release("roll/v1")
+
+    removed = cache.expire("roll/v1")
+    assert removed is not None and not removed.exists()
+    assert cache.cached_path("roll/v1") is None
+    assert cache.expire("roll/v1") is None, "expiring twice is not an error"
+
+    rebuilt = b"header\nrow\n" + b"z" * 4096
+    monkeypatch.setattr(cache_module, "fetch", _writer(rebuilt))
+    assert cache.ensure_release("roll/v1").read_bytes() == rebuilt
+
+
+def test_the_cache_directory_can_be_copied_elsewhere(tmp_path, monkeypatch):
+    """The sidecar records a relative path, so a cache is not welded to where it was filled."""
+    registry, body = _rolling_registry(tmp_path)
+    first = ReleaseCache(registry, root=tmp_path / "one")
+    monkeypatch.setattr(cache_module, "fetch", _writer(body))
+    first.ensure_release("roll/v1")
+
+    shutil.copytree(tmp_path / "one", tmp_path / "two")
+    second = ReleaseCache(registry, root=tmp_path / "two")
+
+    def _explode(*a, **k):
+        raise AssertionError("a copied cache went back to the network")
+
+    monkeypatch.setattr(cache_module, "fetch", _explode)
+    served = second.ensure_release("roll/v1")
+    assert served.read_bytes() == body
+    assert (tmp_path / "two") in served.parents

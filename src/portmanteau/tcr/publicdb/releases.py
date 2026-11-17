@@ -7,6 +7,12 @@ over them.
 
 A new upstream release is a new entry here, never a silent change under an existing name.
 
+⚠️ **Two of the three are `rolling`.** VDJdb publishes dated GitHub release artifacts, so its URL
+names a version and its hash is a contract. McPAS and IEDB both rebuild in place at a fixed URL
+with no version string: their `version` here is the date *we* retrieved them, their hash records
+which build is in use, and once upstream rebuilds those bytes exist only in a cache. See
+`Release.rolling`.
+
 `sha256` is the hash of whatever the URL returns - the archive, for a zipped release. It starts as
 None for an entry nobody has fetched; `ensure_release(..., allow_unpinned=True)` downloads it once
 and prints the value to paste back in. After that an upstream change fails loudly.
@@ -48,6 +54,7 @@ RELEASES: dict[str, Release] = dict([
     _entry(Release(
         database="mcpas",
         version="2026-10-23",
+        rolling=True,
         url="https://friedmanlab.weizmann.ac.il/McPAS-TCR/McPAS-TCR.csv",
         sha256="ccf7ae8068c787c0bc365f89e52e016a9944cf1775d1980fbf06243e598164d3",
         expect_header="CDR3.beta.aa",
@@ -65,6 +72,7 @@ RELEASES: dict[str, Release] = dict([
     _entry(Release(
         database="iedb",
         version="2026-10-23",
+        rolling=True,
         url="https://www.iedb.org/downloader.php?file_name=doc/receptor_full_v3.zip",
         sha256="566627511a30d72e3d60cb63943ad1c771e814aaa9239f2686517da82671e893",
         member="tcr_full_v3.csv",

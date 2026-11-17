@@ -10,8 +10,14 @@ the one an earlier result came from.
 
 `sha256` is the hash of whatever the URL returns — the archive, for a zipped release. It starts as
 None for an entry nobody has fetched; `ReleaseCache.ensure_release(..., allow_unpinned=True)`
-downloads it once and prints the value to paste back in. After that an upstream change fails
-loudly.
+downloads it once and prints the value to paste back in.
+
+⚠️ **What that hash then *means* depends on `rolling`**, because not every upstream lets you ask
+for a version. A URL that names one (`.../releases/download/2026-06-03/...`) can be re-fetched
+forever, so a hash mismatch is a real error. A URL that serves "the current build"
+(`downloader.php?file_name=x.zip`) cannot: the moment upstream rebuilds, the old bytes are gone
+and a mismatch means only that time has passed. Marking the second kind `rolling=True` says the
+hash records which build is in use rather than demanding one.
 
 This module holds only the description of a release. The registry of which releases exist belongs
 to the project that uses them; hand it to `portmanteau.data.release_cache.ReleaseCache`.
@@ -39,6 +45,12 @@ class Release:
             guard against a 404 that returns an HTML page, which a hash cannot catch on the first
             fetch because that fetch is the one doing the pinning.
         min_bytes: refuse anything smaller.
+        rolling: the URL serves whatever upstream currently has, rather than naming a version.
+            Then `sha256` is a **record** of the build in use, not a contract: a cold fetch
+            accepts what arrives and says so, because the pinned bytes are unobtainable. Leave
+            False — the default — wherever the URL names a version, so a mismatch stays an error.
+            ⚠️ This is consulted only on a cache miss. A cached release is served without
+            re-hashing and without contacting the network either way.
         citation: what to cite when the data is used.
         released: upstream release date, ISO. Used to order versions when the version string does
             not sort chronologically by itself.
@@ -54,6 +66,7 @@ class Release:
     filename: str | None = None
     expect_header: str | None = None
     min_bytes: int = 1024
+    rolling: bool = False
     citation: str = ""
     released: str | None = None
     retrieved: str | None = None

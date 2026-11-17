@@ -34,7 +34,10 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
+import tempfile
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -46,7 +49,7 @@ from portmanteau.data.download import cache_dir, fetch, fetch_zip
 
 from .releases import Release
 
-__all__ = ["ReleaseCache"]
+__all__ = ["ReleaseCache", "UpdateCheck"]
 
 SIDECAR_NAME = "_provenance.json"
 DERIVED_DIRNAME = "derived"
@@ -58,6 +61,31 @@ DEFAULT_LOG_COMMAND = (
     "python -c \"from portmanteau.data.release_cache import ReleaseCache; "
     "...ensure_release('{release}')\""
 )
+
+
+@dataclass(frozen=True)
+class UpdateCheck:
+    """What `ReleaseCache.check_for_update` found upstream.
+
+    Attributes:
+        release: `<database>/<version>`.
+        status: "current" (upstream matches the cache), "stale" (upstream has rebuilt) or
+            "absent" (nothing is cached to compare against).
+        cached_sha256: what the cache holds, or None when nothing is cached.
+        upstream_sha256: what upstream is serving now.
+        upstream_bytes: size of what upstream is serving now.
+    """
+
+    release: str
+    status: str
+    cached_sha256: str | None
+    upstream_sha256: str
+    upstream_bytes: int
+
+    @property
+    def stale(self) -> bool:
+        """Upstream has rebuilt since this cache was filled."""
+        return self.status == "stale"
 
 
 class ReleaseCache:
@@ -220,7 +248,11 @@ class ReleaseCache:
         directory = self.cache_root() / release.name
         directory.mkdir(parents=True, exist_ok=True)
         filename = release.filename or Path(urlsplit(release.url).path).name
-        known_hash = f"sha256:{release.sha256}" if release.sha256 else None
+        # ⚠️ A rolling release's hash is a record, not a contract: upstream rebuilt in place and
+        # the pinned bytes no longer exist anywhere but a cache, so demanding them would make a
+        # cold fetch impossible rather than safe. Verify the download against the pin only where
+        # the URL names a version. See `Release.rolling`.
+        known_hash = f"sha256:{release.sha256}" if release.sha256 and not release.rolling else None
 
         if release.member:
             extracted = fetch_zip(release.url, members=[release.member], known_hash=known_hash,
@@ -242,13 +274,26 @@ class ReleaseCache:
             "sha256": digest,
             "archive": filename,
             "member": release.member,
-            "path": str(result),
+            # Relative to the release directory, so the whole cache can be moved or copied. An
+            # absolute path here silently keeps serving the files from wherever they were first
+            # downloaded, which looks like a working cache in the wrong place.
+            "path": str(result.relative_to(directory)),
             "bytes": result.stat().st_size,
             "retrieved": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            **({"rolling": True, "registry_sha256": release.sha256}
+               if release.rolling and release.sha256 and digest != release.sha256 else {}),
         }, indent=2) + "\n")
 
         if release.sha256 is None:
             print(f"{release.name} is unpinned. Add to the registry:\n    sha256=\"{digest}\",")
+        elif release.rolling and digest != release.sha256:
+            # Not an error - but the build moved under us and every number derived from it will
+            # move too, so say so where a run's output records it.
+            print(f"⚠️  {release.name} is rolling and upstream has rebuilt.\n"
+                  f"    registry records sha256={release.sha256}\n"
+                  f"    just fetched     sha256={digest}\n"
+                  f"    Derived tables will rebuild. Update the registry to adopt this build, or "
+                  f"restore the recorded one from a backup if you need the old numbers.")
         return result
 
     def verify_hash(self, spec: str) -> str:
@@ -266,6 +311,84 @@ class ReleaseCache:
         if release.sha256 is not None and digest != release.sha256:
             raise ValueError(f"{release.name}: sha256 is {digest}, registry says {release.sha256}")
         return digest
+
+    def check_for_update(self, spec: str, *, progressbar: bool = False) -> UpdateCheck:
+        """Ask upstream whether it is still serving the bytes this cache holds.
+
+        ⚠️ **This downloads the file.** Neither of the rolling sources this was written for gives
+        a usable cheap signal - IEDB sends no `ETag`, `Content-Length` or `Last-Modified`, and
+        McPAS refuses HEAD - so the only honest check is to fetch and hash. Call it deliberately;
+        nothing calls it for you, and `ensure_release` never does.
+
+        The cache is not touched whatever the answer. To act on a `stale` result, call `expire`
+        and then `ensure_release`.
+
+        Args:
+            spec: `<database>/<version>`, or a bare database name.
+            progressbar: pass through to the downloader. Needs tqdm.
+
+        Returns:
+            An `UpdateCheck`. `cached_sha256` is None where nothing is cached yet, in which case
+            `status` is "absent".
+
+        Raises:
+            ValueError: if the download fails its content check, which means the URL now returns
+                something that is not this dataset at all.
+        """
+        release = self.resolve_release(spec)
+        record = self._provenance(release)
+        cached = record.get("sha256") if record else None
+
+        with tempfile.TemporaryDirectory(prefix="portmanteau-update-") as scratch:
+            directory = Path(scratch)
+            filename = release.filename or Path(urlsplit(release.url).path).name
+            if release.member:
+                fetch_zip(release.url, members=[release.member], known_hash=None,
+                          fname=filename, dest_dir=directory, progressbar=progressbar)
+            else:
+                fetch(release.url, known_hash=None, fname=filename, dest_dir=directory,
+                      progressbar=progressbar)
+            archive = directory / filename
+            upstream = _sha256(archive)
+            size = archive.stat().st_size
+
+        if cached is None:
+            status = "absent"
+        elif upstream == cached:
+            status = "current"
+        else:
+            status = "stale"
+        return UpdateCheck(release=release.name, status=status, cached_sha256=cached,
+                           upstream_sha256=upstream, upstream_bytes=size)
+
+    def expire(self, spec: str, *, missing_ok: bool = True) -> Path | None:
+        """Delete a cached release so the next `ensure_release` fetches it again.
+
+        ⭐ **Derived tables take care of themselves.** `derived_frame` fingerprints on the sha256
+        recorded in the release's sidecar, so once a refetch records different bytes every table
+        built from this release rebuilds on next read. Nothing else needs expiring.
+
+        Only this release's own directory under the cache root is removed; other versions of the
+        same database, and the derived tables themselves, are left alone.
+
+        Args:
+            spec: `<database>/<version>`, or a bare database name.
+            missing_ok: return None rather than raising when nothing is cached.
+
+        Returns:
+            The directory that was removed, or None if there was nothing there.
+
+        Raises:
+            ValueError: if nothing is cached and `missing_ok` is False.
+        """
+        release = self.resolve_release(spec)
+        directory = self.release_dir(release.name)
+        if not directory.exists():
+            if missing_ok:
+                return None
+            raise ValueError(f"{release.name!r} is not cached in {directory}")
+        shutil.rmtree(directory)
+        return directory
 
     def download_log_entry(self, spec: str) -> str:
         """A stanza for a download log, to paste in by hand.
@@ -385,8 +508,15 @@ class ReleaseCache:
             return None
         if release.sha256 is not None and record.get("sha256") != release.sha256:
             return None
-        path = Path(record["path"])
+        path = self._resolve_recorded_path(release, record)
         return path if path.is_file() and path.stat().st_size == record["bytes"] else None
+
+    def _resolve_recorded_path(self, release: Release, record: Mapping[str, Any]) -> Path:
+        """The cached file, from a sidecar written either side of the relative-path change."""
+        recorded = Path(record["path"])
+        # Sidecars written before 20261117 hold an absolute path. Honour them so an existing
+        # cache keeps working, but resolve anything relative against the release directory.
+        return recorded if recorded.is_absolute() else self.release_dir(release.name) / recorded
 
 
 def _sha256(path: Path) -> str:
@@ -403,7 +533,11 @@ def _check_content(path: Path, release: Release) -> None:
     if size < release.min_bytes:
         raise ValueError(f"{release.name}: {path} is {size:,} bytes, under the "
                          f"{release.min_bytes:,} expected. Truncated, or an error page?")
-    head = path.read_bytes()[:SNIFF_BYTES]
+    # ⚠️ Read SNIFF_BYTES, not `path.read_bytes()[:SNIFF_BYTES]`. The latter pulls the entire
+    # file into memory to look at its first 64 KiB, which made a cache hit cost 59 ms on a 119 MB
+    # release against 0.7 ms here - and a cache hit runs this on every call.
+    with path.open("rb") as handle:
+        head = handle.read(SNIFF_BYTES)
     if head.lstrip()[:16].startswith(HTML_PREFIXES):
         raise ValueError(f"{release.name}: {path} starts like an HTML or XML document, which is "
                          "what a 404 page looks like. Check the URL.")

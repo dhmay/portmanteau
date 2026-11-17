@@ -20,10 +20,10 @@ from portmanteau.data.release_cache import ReleaseCache
 
 from .releases import RELEASES
 
-__all__ = ["CACHE", "CACHE_ENV_VAR", "cache_root", "cached_path", "databases", "derived_dir",
-           "derived_frame", "derived_root", "download_log_entry", "ensure_release",
-           "get_release", "latest_cached", "release_dir", "release_provenance",
-           "resolve_release", "verify_hash", "versions"]
+__all__ = ["CACHE", "CACHE_ENV_VAR", "cache_root", "cached_path", "check_for_update",
+           "databases", "derived_dir", "derived_frame", "derived_root", "download_log_entry",
+           "ensure_release", "expire", "get_release", "latest_cached", "release_dir",
+           "release_provenance", "resolve_release", "verify_hash", "versions"]
 
 #: Override the cache location, e.g. on a machine whose OS cache directory is the wrong volume.
 CACHE_ENV_VAR = "PORTMANTEAU_CACHE"
@@ -37,12 +37,14 @@ CACHE = ReleaseCache(RELEASES, root_env=CACHE_ENV_VAR, log_command=LOG_COMMAND)
 
 cache_root = CACHE.cache_root
 cached_path = CACHE.cached_path
+check_for_update = CACHE.check_for_update
 databases = CACHE.databases
 derived_dir = CACHE.derived_dir
 derived_frame = CACHE.derived_frame
 derived_root = CACHE.derived_root
 download_log_entry = CACHE.download_log_entry
 ensure_release = CACHE.ensure_release
+expire = CACHE.expire
 get_release = CACHE.get_release
 latest_cached = CACHE.latest_cached
 release_dir = CACHE.release_dir
