@@ -37,6 +37,7 @@ The only required dependency is pandas. Importing individual modules incurs addi
 | `plots`    | `portmanteau.plots.*`                           | matplotlib, seaborn, plotly, scikit-learn |
 | `sequence` | `portmanteau.sequence.*`                        | networkx, matplotlib, seaborn      |
 | `notebook` | `plots.sankey.display_plotly_html`              | ipython                            |
+| `plots` + `sequence` | `plots.cluster_figure`                | networkx as well as matplotlib     |
 | `slides`   | `portmanteau.slides.notebook_deck`              | python-pptx, pillow, lxml, nbformat |
 
 
